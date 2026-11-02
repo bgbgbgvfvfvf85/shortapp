@@ -1,4 +1,4 @@
-# 檔案名稱：stock_arsenal_v1.py (v9.7 手機RWD完美適配 + 膠囊按鈕直達 + 零重疊旗艦版)
+# 檔案名稱：stock_arsenal_v1.py (v9.8 分頁2手機100%滿版重構 + 無窄欄擠壓旗艦版)
 import os, re, json, requests
 from datetime import datetime
 import pandas as pd
@@ -43,7 +43,7 @@ scale = st.session_state.font_scale
 card_min_width = "245px" if scale >= 1.15 else "210px"
 
 # ==========================================
-# 1. 全域 CSS (含手機版 RWD 雙欄並排與防皇冠遮擋)
+# 1. 全域 CSS (移除窄欄強制分割，確保手機版 100% 滿版清晰)
 # ==========================================
 st.markdown(f"""<style>
 .stApp {{ background-color: {BG_MAIN} !important; color: {TEXT_MAIN} !important; }}
@@ -57,23 +57,9 @@ div[data-testid="stPopover"] {{ position: fixed !important; bottom: 24px !import
 div[data-testid="stPopover"] > button {{ background: linear-gradient(135deg, #00D26A 0%, #009E4F 100%) !important; color: #000000 !important; border-radius: 50px !important; padding: 11px 20px !important; font-size: 15.5px !important; font-weight: 800 !important; border: 2px solid #FFFFFF !important; box-shadow: 0 6px 20px rgba(0, 210, 106, 0.45) !important; white-space: nowrap !important; }}
 div[data-testid="stPopover"] > button:hover {{ transform: scale(1.05) !important; box-shadow: 0 8px 25px rgba(0, 210, 106, 0.7) !important; }}
 @media (max-width: 768px) {{
-    .block-container {{ padding: 2.2rem 0.6rem 5.5rem 0.6rem !important; }}
-    /* 手機版 AI 助手上移至 68px，徹底避開右下角 Streamlit 官方紅藍皇冠圖示 */
+    .block-container {{ padding: 2.2rem 0.65rem 5.5rem 0.65rem !important; }}
     div[data-testid="stPopover"] {{ bottom: 68px !important; right: 12px !important; }}
     div[data-testid="stPopover"] > button {{ padding: 7px 13px !important; font-size: 13px !important; }}
-    /* 手機版強制水平區塊維持 2x2 緊湊並排，不再變成垂直長條巨無霸按鈕 */
-    div[data-testid="stHorizontalBlock"] {{
-        display: flex !important;
-        flex-direction: row !important;
-        flex-wrap: wrap !important;
-        gap: 6px !important;
-    }}
-    div[data-testid="stHorizontalBlock"] > div[data-testid="column"],
-    div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] {{
-        flex: 1 1 46% !important;
-        min-width: 46% !important;
-        width: auto !important;
-    }}
 }}
 div[data-baseweb="tab-list"] {{ display: flex !important; flex-wrap: wrap !important; gap: 6px !important; }}
 button[data-baseweb="tab"] {{ white-space: nowrap !important; padding: 0 12px !important; }}
@@ -113,13 +99,14 @@ components.html("""<script>
 </script>""", height=0, width=0)
 
 top_c1, top_c2 = st.columns([6.8, 3.2])
-with top_c1: st.markdown('<div class="app-main-title">⚡ 個股衍生武器庫 & 短線當沖戰情室</div>', unsafe_allow_html=True)
+with top_c1:
+    st.markdown('<div class="app-main-title">⚡ 個股衍生武器庫 & 短線當沖戰情室</div>', unsafe_allow_html=True)
 with top_c2:
-    btn_t, btn_c1, btn_c2, btn_c3 = st.columns([1.3, 1.0, 1.2, 1.0])
-    btn_t.button("☀️淺色" if is_dark else "🌙深色", help="切換深色/淺色模式", use_container_width=True, on_click=toggle_theme)
-    btn_c1.button("➖字", help="縮小字體", use_container_width=True, on_click=dec_font)
-    btn_c2.markdown(f"<div style='text-align:center; padding-top:6px; font-weight:bold; color:{BEAR_COLOR}; font-size:14px; white-space:nowrap;'>🔍 {int(round(scale*100))}%</div>", unsafe_allow_html=True)
-    btn_c3.button("➕字", help="放大字體", use_container_width=True, on_click=inc_font)
+    with st.expander("⚙️ 顯示設定（切換深淺色 ／ 字體大小）"):
+        btn_t, btn_c1, btn_c2 = st.columns(3)
+        btn_t.button("☀️淺色" if is_dark else "🌙深色", use_container_width=True, on_click=toggle_theme)
+        btn_c1.button("➖縮小字", use_container_width=True, on_click=dec_font)
+        btn_c2.button(f"➕放大({int(round(scale*100))}%)", use_container_width=True, on_click=inc_font)
 
 # ==========================================
 # 2. 視覺化圖表 (RWD 手機防重疊 + 自動邊距) 與共用 UI 渲染器
@@ -251,7 +238,7 @@ def check_tab_password_gate(tab_num, tab_key, is_locked, correct_pwd, gate_title
     return False
 
 # ==========================================
-# 3. 分頁 2 專用「零延遲局部刷新區塊 (@st.fragment)」
+# 3. 分頁 2 專用「手機/電腦雙棲 100% 滿版局部刷新試算室 (@st.fragment)」
 # ==========================================
 @st.fragment
 def render_fast_profit_calculator(line_url, is_public_promo=False):
@@ -259,91 +246,93 @@ def render_fast_profit_calculator(line_url, is_public_promo=False):
         st.session_state.setdefault(f"bp_{idx_b}", 0.0)
         st.session_state.setdefault(f"bl_{idx_b}", 0)
 
-    st.subheader("🧮 現股當沖 ／ 隔日沖「獲利價位 & 做多/放空近五檔損益」試算室")
+    st.subheader("🧮 現股當沖 ／ 隔日沖「獲利價位 & 近五檔損益」試算室")
     with st.container(border=True):
         top_p1, top_p2 = st.columns([3.5, 6.5])
-        excel_fold = top_p1.number_input("🏷️ 手續費折數 (如 2.8 折，單筆低消固定 20 元)：", min_value=0.10, max_value=10.00, value=2.80, step=0.05, format="%.2f")
-        tax_mode_opt = top_p2.radio("🏛️ 選擇交易稅率模式（一鍵切換現沖 / 隔日沖，全表同步更新）：", options=["⚡ 現股當沖 (交易稅 0.15% / 千分之1.5)", "📅 隔日沖 / 一般現股 (交易稅 0.30% / 千分之3)", "🏦 ETF 交易 (交易稅 0.10% / 千分之1)"], index=0, horizontal=True)
+        excel_fold = top_p1.number_input("🏷️ 手續費折數 (如 2.8 折，低消 20 元)：", min_value=0.10, max_value=10.00, value=2.80, step=0.05, format="%.2f")
+        tax_mode_opt = top_p2.radio("🏛️ 交易稅率模式（一鍵切換，全表同步更新）：", options=["⚡ 現股當沖 (稅 0.15%)", "📅 隔日沖/一般現股 (稅 0.30%)", "🏦 ETF 交易 (稅 0.10%)"], index=0, horizontal=True)
         excel_tax_rate = 0.0015 if "0.15%" in tax_mode_opt else (0.0030 if "0.30%" in tax_mode_opt else 0.0010)
 
-    left_col, right_col = st.columns([4.5, 5.5], gap="medium")
+    left_col, right_col = st.columns([4.6, 5.4], gap="medium")
     with left_col:
         with st.container(border=True):
             st.markdown("#### 🎯 1. 單筆買賣「獲利價位 & 損益試算」")
             st.caption(f"目前設定：手續費 **{excel_fold:.2f} 折 (低消20元)** ｜ 交易稅率 **{excel_tax_rate*100:.2f}%**")
-            in_b1, in_b2, in_b3 = st.columns([3.7, 3.7, 2.6])
-            buy_p_in = in_b1.number_input("💵 買進股價 (元)：", min_value=0.01, max_value=30000.0, step=float(de.get_tw_tick_size(st.session_state.w_buy_p)), format="%.2f", key="w_buy_p")
-            sell_p_in = in_b2.number_input("💴 賣出股價 (元)：", min_value=0.01, max_value=30000.0, step=float(de.get_tw_tick_size(st.session_state.w_sell_p)), format="%.2f", key="w_sell_p")
-            lots_in = in_b3.number_input("📦 張數 (張)：", min_value=1, max_value=10000, step=1, key="w_lots")
+            in_b1, in_b2, in_b3 = st.columns(3)
+            buy_p_in = in_b1.number_input("💵 買進股價 (元)", min_value=0.01, max_value=30000.0, step=float(de.get_tw_tick_size(st.session_state.w_buy_p)), format="%.2f", key="w_buy_p")
+            sell_p_in = in_b2.number_input("💴 賣出股價 (元)", min_value=0.01, max_value=30000.0, step=float(de.get_tw_tick_size(st.session_state.w_sell_p)), format="%.2f", key="w_sell_p")
+            lots_in = in_b3.number_input("📦 交易張數 (張)", min_value=1, max_value=10000, step=1, key="w_lots")
 
             main_res = de.calc_trade_row_min20(buy_p_in, sell_p_in, lots_in, excel_fold, excel_tax_rate)
             pnl_color = BULL_COLOR if main_res["net_pnl"] > 0 else (BEAR_COLOR if main_res["net_pnl"] < 0 else TEXT_MAIN)
             st.markdown(f"""<div class="pillar-card" style="border-left: 5px solid {pnl_color}; margin-top: 6px;">
-            <div class="pillar-title"><span>📊 買進 {buy_p_in:g} 元 ➔ 賣出 {sell_p_in:g} 元 ({lots_in} 張)</span><span class="{'tag-bull' if main_res['net_pnl']>0 else 'tag-bear'}">報酬率 {main_res['roi_pct']:+.2f}%</span></div>
-            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px; background:{SCORE_BOX_BG}; padding:10px 12px; border-radius:8px; margin-bottom:10px; font-size:{round(13.5*scale,1)}px;">
-            <div>• <b>買進手續費：</b>{main_res['fee_buy']:,} 元</div><div>• <b>賣出手續費：</b>{main_res['fee_sell']:,} 元</div><div>• <b>手續費合計：</b>{main_res['total_fee']:,} 元</div><div>• <b>賣出交易稅：</b>{main_res['tax']:,} 元</div></div>
+            <div class="pillar-title"><span>📊 買 {buy_p_in:g} 元 ➔ 賣 {sell_p_in:g} 元 ({lots_in} 張)</span><span class="{'tag-bull' if main_res['net_pnl']>0 else 'tag-bear'}">報酬率 {main_res['roi_pct']:+.2f}%</span></div>
+            <div style="background:{SCORE_BOX_BG}; padding:10px 12px; border-radius:8px; margin-bottom:10px; font-size:{round(13.5*scale,1)}px; line-height:1.65;">
+            • <b>手續費明細：</b>買 {main_res['fee_buy']:,} ＋ 賣 {main_res['fee_sell']:,} ＝ <b>{main_res['total_fee']:,} 元</b><br>
+            • <b>交易稅與總成本：</b>稅 {main_res['tax']:,} 元 ｜ 總成本 <b>{main_res['total_cost']:,} 元</b>
+            </div>
             <div style="font-size:{round(14.5*scale,1)}px; line-height:1.75;">
-            - 🧾 <b>總交易成本（手續費＋稅）：</b><b>{main_res['total_cost']:,} 元</b><br>
-            - 📈 <b>做多獲利價位：</b><span style="color:#F59E0B; font-weight:bold; font-size:{round(16.5*scale,1)}px;">{main_res['long_be_price']:.2f} 元</span> <span style="font-size:12.5px; color:#00D26A; font-weight:bold;">(⚡實戰往上 +{main_res['long_win_ticks']} 檔至 {main_res['long_win_price']:g} 元即賺錢！)</span><br>
-            - 📉 <b>放空獲利價位：</b><span style="color:#3498DB; font-weight:bold; font-size:{round(16*scale,1)}px;">{main_res['short_be_price']:.2f} 元</span> <span style="font-size:12.5px; color:#3498DB; font-weight:bold;">(⚡實戰往下 -{main_res['short_win_ticks']} 檔至 {main_res['short_win_price']:g} 元即賺錢！)</span><br>
-            - 💰 <b>實拿損益金額：</b><span style="color:{pnl_color}; font-weight:bold; font-size:{round(22*scale,1)}px;">{main_res['net_pnl']:+,} 元</span></div></div>""", unsafe_allow_html=True)
+            - 📈 <b>做多獲利價：</b><span style="color:#F59E0B; font-weight:bold; font-size:{round(16*scale,1)}px;">{main_res['long_be_price']:.2f} 元</span> <span style="font-size:12.5px; color:#00D26A; font-weight:bold;">(⚡+{main_res['long_win_ticks']}檔至 {main_res['long_win_price']:g} 元即賺)</span><br>
+            - 📉 <b>放空獲利價：</b><span style="color:#3498DB; font-weight:bold; font-size:{round(16*scale,1)}px;">{main_res['short_be_price']:.2f} 元</span> <span style="font-size:12.5px; color:#3498DB; font-weight:bold;">(⚡-{main_res['short_win_ticks']}檔至 {main_res['short_win_price']:g} 元即賺)</span><br>
+            - 💰 <b>實拿淨損益：</b><span style="color:{pnl_color}; font-weight:bold; font-size:{round(21*scale,1)}px;">{main_res['net_pnl']:+,} 元</span></div></div>""", unsafe_allow_html=True)
 
-        with st.container(border=True):
+        with st.expander("🧮 2. 點此展開【分批進場平均成本試算器】（最多 5 批攤平試算）"):
             def load_batch_demo():
                 for i_d, (dp, dl) in enumerate([(106.0, 3), (106.5, 5), (105.0, 5), (0.0, 0), (0.0, 0)], 1):
                     st.session_state[f"bp_{i_d}"], st.session_state[f"bl_{i_d}"] = float(dp), int(dl)
             def clear_batch_all():
                 for i_d in range(1, 6): st.session_state[f"bp_{i_d}"], st.session_state[f"bl_{i_d}"] = 0.0, 0
 
-            bt_c1, bt_c2, bt_c3 = st.columns([5.2, 2.4, 2.4])
-            bt_c1.markdown("#### 🧮 2. 分批進場「平均成本」試算器")
-            bt_c2.button("✨ 帶入範例", key="btn_b_demo", use_container_width=True, on_click=load_batch_demo)
-            bt_c3.button("🗑️ 清空歸零", key="btn_b_clr", use_container_width=True, on_click=clear_batch_all)
-            st.caption("直接輸入各批成交之「股價」與「張數」（未使用的批次張數設為 0 即可），系統即時算出平均股價！")
-
-            h_c1, h_c2, h_c3, h_c4 = st.columns([1.8, 3.2, 2.5, 2.5])
-            for col_h, txt_h in zip((h_c1, h_c2, h_c3, h_c4), ("**批次**", "**成交股價 (元)**", "**張數 (張)**", "**小計 (千元)**")): col_h.markdown(txt_h)
+            bt_c1, bt_c2 = st.columns(2)
+            bt_c1.button("✨ 帶入範例", key="btn_b_demo", use_container_width=True, on_click=load_batch_demo)
+            bt_c2.button("🗑️ 清空歸零", key="btn_b_clr", use_container_width=True, on_click=clear_batch_all)
 
             sum_lots, sum_raw_val = 0, 0.0
             for idx in range(1, 6):
-                bc1, bc2, bc3, bc4 = st.columns([1.8, 3.2, 2.5, 2.5])
-                bc1.markdown(f"<div style='padding-top:8px; font-weight:bold; color:{TEXT_SUB};'>第 {idx} 批</div>", unsafe_allow_html=True)
-                p_val = bc2.number_input(f"股價{idx}", min_value=0.0, max_value=30000.0, step=0.5, format="%.2f", key=f"bp_{idx}", label_visibility="collapsed")
-                l_val = bc3.number_input(f"張數{idx}", min_value=0, max_value=10000, step=1, key=f"bl_{idx}", label_visibility="collapsed")
-                sub_k = round(p_val * l_val, 1) if (p_val > 0 and l_val > 0) else 0.0
-                if p_val > 0 and l_val > 0: sum_lots += int(l_val); sum_raw_val += (p_val * l_val)
-                bc4.markdown(f"<div style='padding-top:8px; font-weight:bold; color:{'#00D26A' if sub_k > 0 else TEXT_MUTED};'>{sub_k:,.1f}</div>", unsafe_allow_html=True)
+                bc1, bc2 = st.columns(2)
+                p_val = bc1.number_input(f"第 {idx} 批成交價 (元)", min_value=0.0, max_value=30000.0, step=0.5, format="%.2f", key=f"bp_{idx}")
+                l_val = bc2.number_input(f"第 {idx} 批張數 (張)", min_value=0, max_value=10000, step=1, key=f"bl_{idx}")
+                if p_val > 0 and l_val > 0:
+                    sum_lots += int(l_val)
+                    sum_raw_val += (p_val * l_val)
 
             sum_ntd_val, avg_stock_p = int(round(sum_raw_val * 1000)), (round(sum_raw_val / sum_lots, 2) if sum_lots > 0 else 0.0)
-            st.markdown(f"""<div style="background:{CARD_BG}; border:1px solid {CARD_BORDER}; border-radius:10px; padding:12px 14px; margin-top:8px; margin-bottom:10px;">
-            <div style="display:flex; justify-content:space-between; flex-wrap:wrap; font-size:{round(14.5*scale,1)}px; margin-bottom:4px;"><span>📌 <b>總張數：</b><b>{sum_lots:,} 張</b></span><span>💵 <b>交割總金額：</b><b>{sum_ntd_val:,} 元</b> <span style="font-size:12px; color:{TEXT_MUTED};">(簡計 {sum_raw_val:,.1f})</span></span></div>
-            <div style="font-size:{round(18*scale,1)}px; font-weight:bold; color:#00D26A;">⚖️ 加權平均股價：{avg_stock_p:.2f} 元</div></div>""", unsafe_allow_html=True)
+            st.markdown(f"""<div style="background:{CARD_BG}; border:1px solid {CARD_BORDER}; border-radius:10px; padding:12px 14px; margin-top:6px; margin-bottom:10px;">
+            <div>📌 <b>總張數：</b><b>{sum_lots:,} 張</b> ｜ 💵 <b>總金額：</b><b>{sum_ntd_val:,} 元</b></div>
+            <div style="font-size:{round(17.5*scale,1)}px; font-weight:bold; color:#00D26A; margin-top:4px;">⚖️ 加權平均股價：{avg_stock_p:.2f} 元</div></div>""", unsafe_allow_html=True)
 
             if sum_lots > 0:
-                st.button(f"📈 做多帶入：將【買進價設為 {avg_stock_p:.2f} 元 × {sum_lots} 張】", use_container_width=True, on_click=lambda a=avg_stock_p, l=sum_lots: st.session_state.update({"w_buy_p": float(a), "w_sell_p": float(de.step_tw_ticks(a, 2)), "w_lots": int(l)}))
-                st.button(f"📉 放空帶入：將【賣出價設為 {avg_stock_p:.2f} 元 × {sum_lots} 張】", use_container_width=True, on_click=lambda a=avg_stock_p, l=sum_lots: st.session_state.update({"w_sell_p": float(a), "w_buy_p": float(de.step_tw_ticks(a, -2)), "w_lots": int(l)}))
+                st.button(f"📈 做多帶入：買進設為 {avg_stock_p:.2f} 元 × {sum_lots} 張", use_container_width=True, on_click=lambda a=avg_stock_p, l=sum_lots: st.session_state.update({"w_buy_p": float(a), "w_sell_p": float(de.step_tw_ticks(a, 2)), "w_lots": int(l)}))
+                st.button(f"📉 放空帶入：賣出設為 {avg_stock_p:.2f} 元 × {sum_lots} 張", use_container_width=True, on_click=lambda a=avg_stock_p, l=sum_lots: st.session_state.update({"w_sell_p": float(a), "w_buy_p": float(de.step_tw_ticks(a, -2)), "w_lots": int(l)}))
 
     with right_col:
-        for is_long in [True, False]:
-            with st.container(border=True):
-                if is_long:
-                    st.markdown(f"#### 📈 3. 【做多近五檔損益】速查表（以買進價 `{buy_p_in:g} 元` × `{lots_in} 張` 為基準）")
-                    st.caption(f"自動展開買進價往上 5 檔（🔥獲利區）與平盤往下 4 檔（❄️虧損區）｜ 實戰往上 **+{main_res['long_win_ticks']} 檔 ({main_res['long_win_price']:g}元)** 開始賺錢")
-                    steps, p_col = [1, 2, 3, 4, 5, 0, -1, -2, -3, -4], "賣出價格"
-                else:
-                    st.markdown(f"#### 📉 4. 【放空近五檔損益】速查表（以先賣價 `{sell_p_in:g} 元` × `{lots_in} 張` 為基準）")
-                    st.caption(f"自動展開先賣價往下 5 檔回補（🔥獲利區）與平盤往上 4 檔回補（❄️虧損區）｜ 實戰往下 **-{main_res['short_win_ticks']} 檔 ({main_res['short_win_price']:g}元)** 開始賺錢")
-                    steps, p_col = [-1, -2, -3, -4, -5, 0, 1, 2, 3, 4], "買進價格"
+        with st.container(border=True):
+            st.markdown("#### 📊 3. 做多 ／ 放空「近五檔價位損益速查表」")
+            tab_long_5, tab_short_5 = st.tabs([
+                f"📈 做多五檔 (買 {buy_p_in:g}元 × {lots_in}張)",
+                f"📉 放空五檔 (賣 {sell_p_in:g}元 × {lots_in}張)"
+            ])
+            for tab_obj, is_long in [(tab_long_5, True), (tab_short_5, False)]:
+                with tab_obj:
+                    if is_long:
+                        st.caption(f"⚡ 買進 `{buy_p_in:g}元` 往上 **+{main_res['long_win_ticks']} 檔 ({main_res['long_win_price']:g}元)** 即開始獲利！")
+                        steps, p_col = [5, 4, 3, 2, 1, 0, -1, -2, -3], "賣價"
+                    else:
+                        st.caption(f"⚡ 先賣 `{sell_p_in:g}元` 往下 **-{main_res['short_win_ticks']} 檔 ({main_res['short_win_price']:g}元)** 回補即開始獲利！")
+                        steps, p_col = [-5, -4, -3, -2, -1, 0, 1, 2, 3], "補價"
 
-                rows_5 = []
-                for s_i in steps:
-                    t_p = de.step_tw_ticks(buy_p_in if is_long else sell_p_in, s_i)
-                    r_c = de.calc_trade_row_min20(buy_p_in if is_long else t_p, t_p if is_long else sell_p_in, lots_in, excel_fold, excel_tax_rate)
-                    if is_long: lbl = f"🔥 獲利 (+{s_i}檔)" if s_i > 0 else ("❄️ 平盤 (0檔)" if s_i == 0 else f"❄️ 虧損 ({s_i}檔)")
-                    else: lbl = f"🔥 獲利 ({s_i}檔回補)" if s_i < 0 else ("❄️ 平盤 (0檔回補)" if s_i == 0 else f"❄️ 虧損 (+{s_i}檔軋空)")
-                    rows_5.append({"檔位狀態": lbl, p_col: t_p, "手續費": r_c["total_fee"], "交易稅": r_c["tax"], "總成本": r_c["total_cost"], "損益金額": r_c["net_pnl"], "報酬率(%)": r_c["roi_pct"]})
+                    rows_5 = []
+                    for s_i in steps:
+                        t_p = de.step_tw_ticks(buy_p_in if is_long else sell_p_in, s_i)
+                        r_c = de.calc_trade_row_min20(buy_p_in if is_long else t_p, t_p if is_long else sell_p_in, lots_in, excel_fold, excel_tax_rate)
+                        if is_long: lbl = f"🔥+{s_i}檔" if s_i > 0 else ("⚪平盤" if s_i == 0 else f"❄️{s_i}檔")
+                        else: lbl = f"🔥{s_i}檔" if s_i < 0 else ("⚪平盤" if s_i == 0 else f"❄️+{s_i}檔")
+                        rows_5.append({"檔位": lbl, p_col: t_p, "實拿損益": r_c["net_pnl"], "報酬率": r_c["roi_pct"], "總成本(稅+費)": r_c["total_cost"]})
 
-                st.dataframe(pd.DataFrame(rows_5).style.map(style_signed_numbers, subset=["損益金額", "報酬率(%)"]).format({p_col: "{:g}", "手續費": "{:,.0f}", "交易稅": "{:,.0f}", "總成本": "{:,.0f}", "損益金額": "{:+,.0f}", "報酬率(%)": "{:+.2f}%"}), use_container_width=True, hide_index=True, height=388)
+                    st.dataframe(
+                        pd.DataFrame(rows_5).style.map(style_signed_numbers, subset=["實拿損益", "報酬率"]).format({p_col: "{:g}", "實拿損益": "{:+,.0f}", "報酬率": "{:+.2f}%", "總成本(稅+費)": "{:,.0f}"}),
+                        use_container_width=True, hide_index=True, height=365
+                    )
 
     render_cta_box(
         "🔥 常做短線現沖或隔日沖，想申請更優惠的【VIP 專屬手續費折數】讓獲利價位門檻更低嗎？" if is_public_promo else "⚡ 想索取今日盤後【當沖主力分點進出明細】、或調整您的單日電子交易與資券額度嗎？",
