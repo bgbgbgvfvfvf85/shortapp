@@ -54,13 +54,20 @@ h1, h2, h3, h4, h5, h6, p, label, .stMarkdown, [data-testid="stCaptionContainer"
 .stButton > button:hover {{ border-color: #4A90E2 !important; color: #60A5FA !important; }}
 .stButton > button[kind="primary"] {{ background: linear-gradient(135deg, #1E3A8A 0%, #2563EB 100%) !important; color: #FFFFFF !important; border: 1.5px solid #60A5FA !important; box-shadow: 0 4px 12px rgba(37, 99, 235, 0.35) !important; }}
 div[data-testid="stPopover"] {{ position: fixed !important; bottom: 24px !important; right: 26px !important; z-index: 999999 !important; width: auto !important; }}
-div[data-testid="stPopover"] button {{ background: linear-gradient(135deg, #00D26A 0%, #009E4F 100%) !important; color: #000000 !important; border-radius: 50px !important; padding: 11px 20px !important; font-size: 15.5px !important; font-weight: 800 !important; border: 2px solid #FFFFFF !important; box-shadow: 0 6px 20px rgba(0, 210, 106, 0.55) !important; white-space: nowrap !important; }}
-div[data-testid="stPopover"] button p, div[data-testid="stPopover"] button span, div[data-testid="stPopover"] button div {{ color: #000000 !important; font-weight: 800 !important; }}
-div[data-testid="stPopover"] button:hover {{ transform: scale(1.05) !important; box-shadow: 0 8px 25px rgba(0, 210, 106, 0.75) !important; }}
+div[data-testid="stPopover"] > div > button, div[data-testid="stPopover"] > button {{ background: linear-gradient(135deg, #00D26A 0%, #009E4F 100%) !important; color: #000000 !important; border-radius: 50px !important; padding: 11px 20px !important; font-size: 15.5px !important; font-weight: 800 !important; border: 2px solid #FFFFFF !important; box-shadow: 0 6px 20px rgba(0, 210, 106, 0.55) !important; white-space: nowrap !important; }}
+div[data-testid="stPopover"] > div > button *, div[data-testid="stPopover"] > button * {{ color: #000000 !important; font-weight: 800 !important; }}
+/* 強制鎖定彈出視窗內部 (Popover Body) 與對話框背景色、文字色，徹底解決白底吃白字問題！ */
+div[data-baseweb="popover"] > div, div[data-testid="stPopoverBody"] {{ background-color: {CARD_BG} !important; color: {TEXT_MAIN} !important; border: 1.5px solid #4A90E2 !important; border-radius: 14px !important; }}
+div[data-testid="stPopoverBody"] h1, div[data-testid="stPopoverBody"] h2, div[data-testid="stPopoverBody"] h3, div[data-testid="stPopoverBody"] h4, div[data-testid="stPopoverBody"] p, div[data-testid="stPopoverBody"] span, div[data-testid="stPopoverBody"] div[data-testid="stMarkdownContainer"] * {{ color: {TEXT_MAIN} !important; }}
+div[data-testid="stPopoverBody"] .stButton > button {{ background-color: {BG_MAIN} !important; color: {TEXT_MAIN} !important; border: 1px solid #4A90E2 !important; border-radius: 8px !important; }}
+div[data-testid="stPopoverBody"] .stButton > button * {{ color: {TEXT_MAIN} !important; }}
+div[data-testid="stPopoverBody"] [data-testid="stChatMessage"] {{ background-color: {BG_MAIN} !important; border: 1px solid {CARD_BORDER} !important; border-radius: 8px !important; padding: 8px 10px !important; margin-bottom: 6px !important; }}
+div[data-testid="stPopoverBody"] [data-testid="stChatInput"] > div {{ background-color: {BG_MAIN} !important; border: 1px solid {CARD_BORDER} !important; }}
+div[data-testid="stPopoverBody"] textarea {{ color: {TEXT_MAIN} !important; -webkit-text-fill-color: {TEXT_MAIN} !important; }}
 @media (max-width: 768px) {{
     .block-container {{ padding: 2.2rem 0.65rem 5.5rem 0.65rem !important; }}
     div[data-testid="stPopover"] {{ bottom: 68px !important; right: 12px !important; }}
-    div[data-testid="stPopover"] button {{ padding: 8px 14px !important; font-size: 13.5px !important; }}
+    div[data-testid="stPopover"] > div > button, div[data-testid="stPopover"] > button {{ padding: 8px 14px !important; font-size: 13.5px !important; }}
 }}
 div[data-baseweb="tab-list"] {{ display: flex !important; flex-wrap: wrap !important; gap: 6px !important; }}
 button[data-baseweb="tab"] {{ white-space: nowrap !important; padding: 0 12px !important; }}
