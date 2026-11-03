@@ -54,12 +54,13 @@ h1, h2, h3, h4, h5, h6, p, label, .stMarkdown, [data-testid="stCaptionContainer"
 .stButton > button:hover {{ border-color: #4A90E2 !important; color: #60A5FA !important; }}
 .stButton > button[kind="primary"] {{ background: linear-gradient(135deg, #1E3A8A 0%, #2563EB 100%) !important; color: #FFFFFF !important; border: 1.5px solid #60A5FA !important; box-shadow: 0 4px 12px rgba(37, 99, 235, 0.35) !important; }}
 div[data-testid="stPopover"] {{ position: fixed !important; bottom: 24px !important; right: 26px !important; z-index: 999999 !important; width: auto !important; }}
-div[data-testid="stPopover"] > button {{ background: linear-gradient(135deg, #00D26A 0%, #009E4F 100%) !important; color: #000000 !important; border-radius: 50px !important; padding: 11px 20px !important; font-size: 15.5px !important; font-weight: 800 !important; border: 2px solid #FFFFFF !important; box-shadow: 0 6px 20px rgba(0, 210, 106, 0.45) !important; white-space: nowrap !important; }}
-div[data-testid="stPopover"] > button:hover {{ transform: scale(1.05) !important; box-shadow: 0 8px 25px rgba(0, 210, 106, 0.7) !important; }}
+div[data-testid="stPopover"] button {{ background: linear-gradient(135deg, #00D26A 0%, #009E4F 100%) !important; color: #000000 !important; border-radius: 50px !important; padding: 11px 20px !important; font-size: 15.5px !important; font-weight: 800 !important; border: 2px solid #FFFFFF !important; box-shadow: 0 6px 20px rgba(0, 210, 106, 0.55) !important; white-space: nowrap !important; }}
+div[data-testid="stPopover"] button p, div[data-testid="stPopover"] button span, div[data-testid="stPopover"] button div {{ color: #000000 !important; font-weight: 800 !important; }}
+div[data-testid="stPopover"] button:hover {{ transform: scale(1.05) !important; box-shadow: 0 8px 25px rgba(0, 210, 106, 0.75) !important; }}
 @media (max-width: 768px) {{
     .block-container {{ padding: 2.2rem 0.65rem 5.5rem 0.65rem !important; }}
     div[data-testid="stPopover"] {{ bottom: 68px !important; right: 12px !important; }}
-    div[data-testid="stPopover"] > button {{ padding: 7px 13px !important; font-size: 13px !important; }}
+    div[data-testid="stPopover"] button {{ padding: 8px 14px !important; font-size: 13.5px !important; }}
 }}
 div[data-baseweb="tab-list"] {{ display: flex !important; flex-wrap: wrap !important; gap: 6px !important; }}
 button[data-baseweb="tab"] {{ white-space: nowrap !important; padding: 0 12px !important; }}
