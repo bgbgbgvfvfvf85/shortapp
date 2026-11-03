@@ -1,5 +1,5 @@
-# 檔案名稱：data_engine.py (v9.2 證交所/期交所官方直連精準版)
-import os, re, io, csv, json, math, base64, urllib.parse, urllib3, requests
+# 檔案名稱：data_engine.py (v9.9 盤前09:00時間閘門保護 + 破除Yahoo快取 + 三通道精準版)
+import os, re, io, csv, json, math, time, base64, urllib.parse, urllib3, requests
 import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
 from datetime import datetime, timezone
@@ -55,7 +55,6 @@ def save_config(cfg):
 
 def load_config():
     os.makedirs(DATA_DIR, exist_ok=True)
-    # 1. 將預設底稿直接設為最新真實水位，萬一重啟也絕不跳回古老假數字
     cfg = {
         "lock_tab1": False, "pwd_tab1": "VIP888", "lock_tab2": False, "pwd_tab2": "TICK888",
         "lock_tab3": True, "pwd_tab3": "FUT888", "lock_tab4": False, "pwd_tab4": "VIP888",
@@ -67,22 +66,16 @@ def load_config():
         "mkt_short_bal": 217708, "mkt_short_chg": 1169, "cnn_fear_greed": 34,
         "mkt_chip_date": ""
     }
-    # 2. 優先讀取雲端 Streamlit Secrets 保險箱（雲端重啟永遠不會失憶，且保護 API Key 不外洩）
     try:
         for k in list(cfg.keys()):
-            if k in st.secrets:
-                cfg[k] = st.secrets[k]
-    except Exception:
-        pass
+            if k in st.secrets: cfg[k] = st.secrets[k]
+    except Exception: pass
 
-    # 3. 讀取本地或執行期間動態更新的 config.json
     if os.path.exists(CONFIG_FILE):
         try:
-            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                saved = json.load(f)
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f: saved = json.load(f)
             cfg.update(saved)
-        except Exception:
-            pass
+        except Exception: pass
     return cfg
 
 def init_sample_csvs():
@@ -171,21 +164,48 @@ def calculate_cdp(high, low, close):
     return {"AH": round(cdp + pt, 2), "NH": round(2 * cdp - low, 2), "CDP": round(cdp, 2), "NL": round(2 * cdp - high, 2), "AL": round(cdp - pt, 2), "PT": round(pt, 2)}
 
 # ==========================================
-# 3. 技術指標、K線與籌碼爬蟲引擎
+# 3. 技術指標、K線與盤前09:00時間閘門引擎
 # ==========================================
 def clean_holiday_phantom_bars(df_in, is_index=False):
+    """
+    【v9.9 關鍵修復】精準判斷台灣開盤時間 (09:00)：
+    1. 剔除週末六日 (weekday >= 5) 的異常佔位 K 棒
+    2. 若現在台灣時間尚未滿 09:00 (如週二早上8點多)，自動剔除當天尚未開盤的盤前空 K 棒，100% 保留前一個交易日 (如週一) 的完整 K 棒！
+    3. 針對個股剔除 Volume=0 且 High==Low 的國定假日假 K 棒 (大盤指數因 Yahoo Volume 常態為 0，不以 Volume 誤殺)
+    """
     if df_in.empty: return df_in
     df = df_in.copy()
+
+    # 1. 剔除週六、週日
+    df = df[df.index.dayofweek < 5]
+    if df.empty: return df
+
+    # 2. 台灣時間 09:00 開盤前保護閘門
+    now_tw = pd.Timestamp.now(tz="Asia/Taipei")
+    today_str = now_tw.strftime("%Y-%m-%d")
+    is_pre_market = (now_tw.hour < 9)
+
+    if len(df) > 1 and df.index[-1].strftime("%Y-%m-%d") == today_str:
+        last_h, last_l, last_v = float(df["High"].iloc[-1]), float(df["Low"].iloc[-1]), float(df["Volume"].iloc[-1])
+        # 若尚未 09:00 開盤，或當日高低價完全相等且無量 (開盤前試撮佔位符)，剔除今日尚未開盤的假 K 棒
+        if is_pre_market or (abs(last_h - last_l) < 1e-5 and last_v <= 0):
+            df = df.iloc[:-1]
+
+    # 3. 針對個股剔除歷史休市日假 K 棒
     if not is_index:
         df = df[~((df["Volume"] <= 0) & ((df["High"] - df["Low"]).abs() < 1e-5))]
-    while len(df) > 5 and abs(float(df["High"].iloc[-1]) - float(df["Low"].iloc[-1])) < 1e-5 and float(df["Volume"].iloc[-1]) <= 0:
-        df = df.iloc[:-1]
+    else:
+        # 大盤指數僅剔除高低價完全為 0 或 High == Low 且與前日收盤完全相同的休市佔位棒
+        if len(df) > 5:
+            prev_c = df["Close"].shift(1)
+            phantom_idx = ((df["High"] - df["Low"]).abs() < 1e-4) & ((df["Close"] - prev_c).abs() < 1e-4)
+            df = df[~phantom_idx]
+
     return df
 
 def compute_td_sequential_and_bbands(df_in):
     df = df_in.copy()
     df["MA5"], df["MA20"], df["MA60"] = df["Close"].rolling(5).mean(), df["Close"].rolling(20).mean(), df["Close"].rolling(60).mean()
-    # ddof=0 與一般看盤軟體布林通道標準差對齊
     std20 = df["Close"].rolling(20).std(ddof=0)
     df["BB_Upper"], df["BB_Lower"] = df["MA20"] + 2.0 * std20, df["MA20"] - 2.0 * std20
 
@@ -227,7 +247,6 @@ def calc_kd_rsi_macd(hist):
         d_vals.append((2/3) * d_vals[-1] + (1/3) * k_vals[-1])
     dif = hist["Close"].ewm(span=12, adjust=False).mean() - hist["Close"].ewm(span=26, adjust=False).mean()
     osc = dif - dif.ewm(span=9, adjust=False).mean()
-    # 改用 Wilder's Smoothing (alpha=1/14) 對齊台股看盤軟體 RSI(14)
     delta = hist["Close"].diff()
     gain = delta.clip(lower=0).ewm(alpha=1/14, adjust=False).mean()
     loss = (-delta.clip(upper=0)).ewm(alpha=1/14, adjust=False).mean()
@@ -236,19 +255,25 @@ def calc_kd_rsi_macd(hist):
     return round(k_vals[-1], 1), round(d_vals[-1], 1), round(k_vals[-2], 1), round(d_vals[-2], 1), round(float(osc.iloc[-1]), 2), round(float(osc.iloc[-2]), 2) if len(osc)>=2 else 0.0, rsi14
 
 def fetch_kline_df_bypass_ssl(code, market_hint="TWSE", range_str="6mo"):
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Cache-Control": "no-cache", "Pragma": "no-cache"
+    }
     error_logs, is_idx = [], code in ["^TWII", "TAIEX"]
     symbols = ["%5ETWII"] if is_idx else [f"{code}{sfx}" for sfx in ([".TWO", ".TW"] if market_hint == "TPEX" else [".TW", ".TWO"])]
+    ts_bucket = int(time.time() // 180)  # 每 3 分鐘更換時間戳記，強制破除 Yahoo CDN 舊快取！
 
     for sym in symbols:
-        for host in ["query1.finance.yahoo.com", "query2.finance.yahoo.com"]:
+        for host in ["query2.finance.yahoo.com", "query1.finance.yahoo.com"]:
             try:
-                resp = requests.get(f"https://{host}/v8/finance/chart/{sym}?range={range_str}&interval=1d", headers=headers, timeout=6, verify=False)
+                url = f"https://{host}/v8/finance/chart/{sym}?range={range_str}&interval=1d&includePrePost=false&_ts={ts_bucket}"
+                resp = requests.get(url, headers=headers, timeout=6, verify=False)
                 if resp.status_code == 200:
                     res_list = resp.json().get("chart", {}).get("result", [])
                     if res_list:
-                        timestamps = res_list[0].get("timestamp", [])
-                        quote = res_list[0].get("indicators", {}).get("quote", [{}])[0]
+                        res_obj = res_list[0]
+                        timestamps = res_obj.get("timestamp", [])
+                        quote = res_obj.get("indicators", {}).get("quote", [{}])[0]
                         if timestamps and "close" in quote:
                             tw_dates = pd.to_datetime(timestamps, unit="s", utc=True).tz_convert("Asia/Taipei").normalize()
                             df_tmp = pd.DataFrame({
@@ -267,7 +292,7 @@ def fetch_kline_df_bypass_ssl(code, market_hint="TWSE", range_str="6mo"):
         resp = requests.get("https://api.finmindtrade.com/api/v4/data", params={"dataset": "TaiwanStockPrice", "data_id": "TAIEX" if is_idx else code, "start_date": start_dt}, headers=headers, timeout=8, verify=False)
         if resp.status_code == 200 and resp.json().get("data"):
             df_fm = pd.DataFrame(resp.json()["data"])
-            df_fm["Date"] = pd.to_datetime(df_fm["date"])
+            df_fm["Date"] = pd.to_datetime(df_fm["date"]).dt.tz_localize("Asia/Taipei")
             df_fm = df_fm.set_index("Date")
             df_fm = df_fm[~df_fm.index.duplicated(keep="last")]
             vol_col = "Trading_Volume" if "Trading_Volume" in df_fm.columns else ("volume" if "volume" in df_fm.columns else None)
@@ -281,13 +306,14 @@ def fetch_kline_df_bypass_ssl(code, market_hint="TWSE", range_str="6mo"):
     except Exception as e: error_logs.append(f"FM:{str(e)[:40]}")
     return pd.DataFrame(), " | ".join(error_logs[:2])
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=180)
 def fetch_5m_intraday_kline(code, market_hint="TWSE"):
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", "Cache-Control": "no-cache"}
+    ts_bucket = int(time.time() // 180)
     for sfx in ([".TWO", ".TW"] if market_hint == "TPEX" else [".TW", ".TWO"]):
-        for host in ["query1.finance.yahoo.com", "query2.finance.yahoo.com"]:
+        for host in ["query2.finance.yahoo.com", "query1.finance.yahoo.com"]:
             try:
-                resp = requests.get(f"https://{host}/v8/finance/chart/{code}{sfx}?range=5d&interval=5m", headers=headers, timeout=6, verify=False)
+                resp = requests.get(f"https://{host}/v8/finance/chart/{code}{sfx}?range=5d&interval=5m&includePrePost=false&_ts={ts_bucket}", headers=headers, timeout=6, verify=False)
                 if resp.status_code == 200:
                     res_list = resp.json().get("chart", {}).get("result", [])
                     if res_list:
@@ -307,7 +333,7 @@ def fetch_5m_intraday_kline(code, market_hint="TWSE"):
             except Exception: continue
     return []
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=300)
 def fetch_technical_indicators(code, market_hint="TWSE"):
     hist, err_msg = fetch_kline_df_bypass_ssl(code, market_hint, range_str="6mo")
     if hist.empty or len(hist) < 5: return {"ok": False, "err_msg": err_msg}
@@ -341,7 +367,7 @@ def fetch_technical_indicators(code, market_hint="TWSE"):
         "kline_60": hist_60[["DateStr", "Open", "High", "Low", "Close", "Volume", "MA5", "MA20", "MA60", "BB_Upper", "BB_Lower", "TD_Buy", "TD_Sell", "TD_Buy_Disp", "TD_Sell_Disp"]].to_dict("records")
     }
 
-@st.cache_data(ttl=14400)
+@st.cache_data(ttl=3600)
 def fetch_chip_data_20d(code, fm_token=""):
     empty_periods = {w: {"f": 0, "t": 0, "d": 0, "tot": 0} for w in [1, 3, 5, 10, 20]}
     try:
@@ -370,7 +396,7 @@ def fetch_chip_data_20d(code, fm_token=""):
     except Exception: pass
     return {"ok": False, "periods": empty_periods, "foreign_5d": 0, "trust_5d": 0, "dealer_5d": 0, "total_5d": 0, "foreign_10d": 0, "trust_10d": 0, "dealer_10d": 0, "total_10d": 0, "daily_table": []}
 
-@st.cache_data(ttl=14400)
+@st.cache_data(ttl=3600)
 def fetch_margin_short_20d(code, fm_token=""):
     empty_m_periods = {w: {"m_chg": 0, "s_chg": 0} for w in [1, 3, 5, 10, 20]}
     try:
@@ -401,14 +427,11 @@ def fetch_margin_short_20d(code, fm_token=""):
     except Exception: pass
     return {"ok": False, "eligible": False, "periods": empty_m_periods, "margin_bal": 0, "margin_chg": 0, "margin_util": 0.0, "short_bal": 0, "short_chg": 0, "short_margin_ratio": 0.0, "daily_table": []}
 
-@st.cache_data(ttl=3600)
-@st.cache_data(ttl=3600)
-def fetch_market_breadth_and_fear_greed(fallback_fg=21):
+@st.cache_data(ttl=900)
+def fetch_market_breadth_and_fear_greed(fallback_fg=34):
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", "Accept": "application/json", "Referer": "https://edition.cnn.com/markets/fear-and-greed"}
     up_cnt = down_cnt = flat_cnt = 0
     breadth_ok = False
-
-    # 1. 抓取上市 (TWSE) 普通股漲跌家數 + 2. 抓取上櫃 (TPEX) 普通股漲跌家數（合計約 1,800+ 檔）
     for url, c_key, chg_key in [
         ("https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL", "Code", "Change"),
         ("https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes", "SecuritiesCompanyCode", "Change")
@@ -417,21 +440,17 @@ def fetch_market_breadth_and_fear_greed(fallback_fg=21):
             r_mkt = requests.get(url, headers=headers, timeout=8, verify=False)
             if r_mkt.status_code == 200:
                 for it in r_mkt.json():
-                    if not re.match(r"^\d{4}$", str(it.get(c_key, "")).strip()):
-                        continue
+                    if not re.match(r"^\d{4}$", str(it.get(c_key, "")).strip()): continue
                     chg_str = str(it.get(chg_key, "0")).replace(",", "").replace("+", "").replace(" ", "").strip()
                     try:
                         chg_v = float(chg_str)
                         if chg_v > 0: up_cnt += 1
                         elif chg_v < 0: down_cnt += 1
                         else: flat_cnt += 1
-                    except Exception:
-                        flat_cnt += 1
-        except Exception:
-            pass
+                    except Exception: flat_cnt += 1
+        except Exception: pass
 
-    if (up_cnt + down_cnt) > 100:
-        breadth_ok = True
+    if (up_cnt + down_cnt) > 100: breadth_ok = True
 
     fg_score, fg_source = int(fallback_fg), "後台校準值"
     try:
@@ -440,13 +459,9 @@ def fetch_market_breadth_and_fear_greed(fallback_fg=21):
             score_val = r_cnn.json().get("fear_and_greed", {}).get("score")
             if score_val is not None: fg_score, fg_source = int(round(float(score_val))), "CNN自動連線"
     except Exception: pass
-    return {
-        "breadth_ok": breadth_ok, "up_cnt": up_cnt, "down_cnt": down_cnt, "flat_cnt": flat_cnt,
-        "adl_diff": up_cnt - down_cnt, "up_ratio": round((up_cnt / max(1, up_cnt + down_cnt)) * 100, 1) if breadth_ok else 50.0,
-        "fg_score": fg_score, "fg_source": fg_source
-    }
+    return {"breadth_ok": breadth_ok, "up_cnt": up_cnt, "down_cnt": down_cnt, "flat_cnt": flat_cnt, "adl_diff": up_cnt - down_cnt, "up_ratio": round((up_cnt / max(1, up_cnt + down_cnt)) * 100, 1) if breadth_ok else 50.0, "fg_score": fg_score, "fg_source": fg_source}
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=300)
 def fetch_taiex_market_data():
     hist, err_msg = fetch_kline_df_bypass_ssl("^TWII", "TWSE", range_str="6mo")
     if hist.empty or len(hist) < 20: return {"ok": False, "err_msg": err_msg}
@@ -486,7 +501,7 @@ def fetch_taiex_market_data():
         "kline_60": hist_60[["DateStr", "Open", "High", "Low", "Close", "MA5", "MA20", "MA60", "BB_Upper", "BB_Lower", "TD_Buy", "TD_Sell", "TD_Buy_Disp", "TD_Sell_Disp"]].to_dict("records")
     }
 
-@st.cache_data(ttl=14400)
+@st.cache_data(ttl=1800)
 def scan_sector_performance(sector_map_json_str, margins_dict):
     sec_map = json.loads(sector_map_json_str)
     tasks = [(sec_name, item[0], item[1], item[2]) for sec_name, s_list in sec_map.items() for item in s_list]
@@ -528,7 +543,7 @@ def scan_sector_performance(sector_map_json_str, margins_dict):
             })
     return sorted(summary_list, key=lambda x: x["近5日平均漲跌(%)"], reverse=True)
 
-@st.cache_data(ttl=14400)
+@st.cache_data(ttl=1800)
 def scan_futures_leaderboard(codes_tuple, names_dict, margins_dict, markets_dict):
     def _worker_fut(code):
         sub, _ = fetch_kline_df_bypass_ssl(code, markets_dict.get(code, "TWSE"), range_str="2mo")
@@ -643,12 +658,6 @@ def extract_stocks_from_image_via_gemini(image_bytes, mime_type, api_key):
     return resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip() if resp.status_code == 200 else ""
 
 def fetch_taifex_foreign_tx_oi_csv(fm_token=""):
-    """
-    【v9.4 三重通道實戰版】
-    通道1：透過 Session 抓取期交所 futContractsDateDown CSV (支援 UTF-8 / Big5 雙解碼與動態欄位定位)
-    通道2：直接逐日解析期交所 futContractsDate 網頁 HTML 表格中之「臺股期貨 -> 外資及陸資」未平倉淨額
-    通道3：FinMind TaiwanFuturesInstitutionalInvestors API 備援
-    """
     sess = requests.Session()
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -657,19 +666,10 @@ def fetch_taifex_foreign_tx_oi_csv(fm_token=""):
     }
     now_dt = pd.Timestamp.now()
 
-    # --- 通道 1：期交所官方 CSV 批次下載 (先取得 Cookie 再 POST) ---
     try:
         sess.get("https://www.taifex.com.tw/cht/3/futContractsDate", headers=headers, timeout=5, verify=False)
         start_dt = now_dt - pd.Timedelta(days=14)
-        payload = {
-            "queryType": "1",
-            "goDay": "",
-            "doQuery": "1",
-            "dateaddcnt": "",
-            "queryStartDate": start_dt.strftime("%Y/%m/%d"),
-            "queryEndDate": now_dt.strftime("%Y/%m/%d"),
-            "commodityId": "TX"
-        }
+        payload = {"queryType": "1", "goDay": "", "doQuery": "1", "dateaddcnt": "", "queryStartDate": start_dt.strftime("%Y/%m/%d"), "queryEndDate": now_dt.strftime("%Y/%m/%d"), "commodityId": "TX"}
         r = sess.post("https://www.taifex.com.tw/cht/3/futContractsDateDown", data=payload, headers=headers, timeout=8, verify=False)
         if r.status_code == 200 and len(r.content) > 100:
             for enc in ["cp950", "utf-8-sig", "utf-8", "big5"]:
@@ -680,8 +680,6 @@ def fetch_taifex_foreign_tx_oi_csv(fm_token=""):
                         if len(row) >= 12:
                             row_str = " ".join(str(c) for c in row[:4])
                             if ("臺股期貨" in row_str or "台股期貨" in row_str or "TX" in row_str) and "外資" in row_str:
-                                # 期交所 CSV 最後 6 欄固定為：多方口數, 多方金額, 空方口數, 空方金額, 多空淨額口數, 多空淨額金額
-                                # 因此倒數第 2 欄 (row[-2]) 或 index 13 必為「多空未平倉口數淨額」
                                 candidates = [row[13]] if len(row) > 13 else []
                                 candidates.append(row[-2])
                                 for cand in candidates:
@@ -692,49 +690,31 @@ def fetch_taifex_foreign_tx_oi_csv(fm_token=""):
                                         break
                     if len(date_oi_map) >= 2:
                         sorted_dts = sorted(date_oi_map.keys())
-                        latest_oi = date_oi_map[sorted_dts[-1]]
-                        prev_oi = date_oi_map[sorted_dts[-2]]
-                        return {"mkt_foreign_oi": latest_oi, "mkt_foreign_oi_chg": latest_oi - prev_oi}
-    except Exception:
-        pass
+                        return {"mkt_foreign_oi": date_oi_map[sorted_dts[-1]], "mkt_foreign_oi_chg": date_oi_map[sorted_dts[-1]] - date_oi_map[sorted_dts[-2]]}
+    except Exception: pass
 
-    # --- 通道 2：直接查詢期交所每日 HTML 網頁表格 (往回找最近 2 個有效交易日) ---
     try:
         found_ois = []
         for d_back in range(0, 10):
             q_date = (now_dt - pd.Timedelta(days=d_back)).strftime("%Y/%m/%d")
-            r_html = sess.post(
-                "https://www.taifex.com.tw/cht/3/futContractsDate",
-                data={"queryType": "1", "goDay": "", "doQuery": "1", "dateaddcnt": "", "queryDate": q_date, "commodityId": "TX"},
-                headers=headers, timeout=6, verify=False
-            )
+            r_html = sess.post("https://www.taifex.com.tw/cht/3/futContractsDate", data={"queryType": "1", "goDay": "", "doQuery": "1", "dateaddcnt": "", "queryDate": q_date, "commodityId": "TX"}, headers=headers, timeout=6, verify=False)
             if r_html.status_code == 200 and ("外資及陸資" in r_html.text):
-                # 將 HTML 標籤去除，提取純文字與數字陣列
-                trs = re.findall(r"<tr[^>]*>(.*?)</tr>", r_html.text, re.S)
-                for tr in trs:
+                for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", r_html.text, re.S):
                     if "外資及陸資" in tr:
                         tds = [re.sub(r"<[^>]+>", "", td).replace(",", "").strip() for td in re.findall(r"<td[^>]*>(.*?)</td>", tr, re.S)]
                         nums = [int(x) for x in tds if re.match(r"^-?\d+$", x)]
-                        # 外資該列共有 12 個數字：交易(多口,多額,空口,空額,淨口,淨額) + 未平倉(多口,多額,空口,空額,淨口,淨額)
-                        # 倒數第 2 個數字 (nums[-2]) 就是「未平倉多空淨額口數」！
                         if len(nums) >= 6:
                             found_ois.append((q_date, nums[-2]))
                             break
-            if len(found_ois) >= 2:
-                break
-        if len(found_ois) >= 2:
-            return {"mkt_foreign_oi": found_ois[0][1], "mkt_foreign_oi_chg": found_ois[0][1] - found_ois[1][1]}
-        elif len(found_ois) == 1:
-            return {"mkt_foreign_oi": found_ois[0][1]}
-    except Exception:
-        pass
+            if len(found_ois) >= 2: break
+        if len(found_ois) >= 2: return {"mkt_foreign_oi": found_ois[0][1], "mkt_foreign_oi_chg": found_ois[0][1] - found_ois[1][1]}
+        elif len(found_ois) == 1: return {"mkt_foreign_oi": found_ois[0][1]}
+    except Exception: pass
 
-    # --- 通道 3：FinMind API 備援 ---
     try:
         start_dt = (now_dt - pd.Timedelta(days=15)).strftime("%Y-%m-%d")
         params = {"dataset": "TaiwanFuturesInstitutionalInvestors", "data_id": "TX", "start_date": start_dt}
-        if fm_token:
-            params["token"] = fm_token
+        if fm_token: params["token"] = fm_token
         r_fm = requests.get("https://api.finmindtrade.com/api/v4/data", params=params, timeout=8, verify=False)
         if r_fm.status_code == 200 and r_fm.json().get("data"):
             df_f = pd.DataFrame(r_fm.json()["data"])
@@ -743,19 +723,14 @@ def fetch_taifex_foreign_tx_oi_csv(fm_token=""):
                 oi_today = int(float(sub_f.iloc[-1]["long_open_interest_balance_volume"]) - float(sub_f.iloc[-1]["short_open_interest_balance_volume"]))
                 oi_prev = int(float(sub_f.iloc[-2]["long_open_interest_balance_volume"]) - float(sub_f.iloc[-2]["short_open_interest_balance_volume"]))
                 return {"mkt_foreign_oi": oi_today, "mkt_foreign_oi_chg": oi_today - oi_prev}
-    except Exception:
-        pass
+    except Exception: pass
 
     return {}
 
 def sync_market_institutional_online(fm_token=""):
-    """
-    【v9.4 終極修正】保留真實 6,233 億大盤融資餘額（不除以2）＋ 三通道同步外資台指期未平倉口數
-    """
     headers, res = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}, {}
     now_dt = pd.Timestamp.now()
 
-    # 1. 證交所三大法人買賣金額統計表 (BFI82U)
     for d_back in range(0, 7):
         q_date = (now_dt - pd.Timedelta(days=d_back)).strftime("%Y%m%d")
         try:
@@ -772,7 +747,6 @@ def sync_market_institutional_online(fm_token=""):
                 break
         except Exception: continue
 
-    # 2. 證交所官方 MI_MARGN 信用交易統計 (直接取真實億元水位，不再除以 2！)
     margin_history = []
     for d_back in range(0, 12):
         q_date = (now_dt - pd.Timedelta(days=d_back)).strftime("%Y%m%d")
@@ -800,19 +774,15 @@ def sync_market_institutional_online(fm_token=""):
         latest_m = margin_history[0]
         res["mkt_margin_bal"] = latest_m["m_today"]
         res["mkt_margin_chg"] = round(latest_m["m_today"] - latest_m["m_prev"], 2)
-        if len(margin_history) >= 3:
-            res["mkt_margin_chg_3d"] = round(latest_m["m_today"] - margin_history[2]["m_prev"], 2)
-        else:
-            res["mkt_margin_chg_3d"] = res["mkt_margin_chg"]
+        res["mkt_margin_chg_3d"] = round(latest_m["m_today"] - margin_history[2]["m_prev"], 2) if len(margin_history) >= 3 else res["mkt_margin_chg"]
         if latest_m["s_today"] is not None:
             res["mkt_short_bal"] = latest_m["s_today"]
             res["mkt_short_chg"] = latest_m["s_today"] - latest_m["s_prev"]
 
-    # 3. 三重通道抓取外資台指期未平倉口數與單日增減
     res.update(fetch_taifex_foreign_tx_oi_csv(fm_token))
     return res
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=1800)
 def auto_sync_market_chips_cached(fm_token=""):
     cfg = load_config()
     mkt_res = sync_market_institutional_online(fm_token)
