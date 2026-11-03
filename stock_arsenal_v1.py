@@ -1,5 +1,5 @@
 # 檔案名稱：stock_arsenal_v1.py (v10.0 黃金三分頁 + 日K/60分K/5分K三週期共振雷達 + 極速無損渲染旗艦版)
-import os, re, json, requests
+import os, re, json, requests, importlib
 from datetime import datetime
 import pandas as pd
 import streamlit as st
@@ -7,6 +7,7 @@ import streamlit.components.v1 as components
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import data_engine as de
+importlib.reload(de)
 
 st.set_page_config(page_title="個股衍生武器庫 & 短線當沖戰情室", page_icon="⚡", layout="wide", initial_sidebar_state="collapsed")
 
