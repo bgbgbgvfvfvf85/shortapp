@@ -1,5 +1,6 @@
-# 檔案名稱：data_engine.py (v9.9 盤前09:00時間閘門保護 + 破除Yahoo快取 + 三通道精準版)
+# 檔案名稱：data_engine.py (v10.0 三週期共振引擎 日K/60分K/5分K + TCP高速連線池 + 09:00時間閘門版)
 import os, re, io, csv, json, math, time, base64, urllib.parse, urllib3, requests
+from requests.adapters import HTTPAdapter
 import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
 from datetime import datetime, timezone
@@ -8,6 +9,18 @@ import pandas as pd
 import streamlit as st
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# ==========================================
+# 0. 全域 TCP 連線池 (省去 93 檔成分股重複 SSL 握手時間)
+# ==========================================
+GLOBAL_HTTP_SESSION = requests.Session()
+_adapter = HTTPAdapter(pool_connections=20, pool_maxsize=20, max_retries=1)
+GLOBAL_HTTP_SESSION.mount("https://", _adapter)
+GLOBAL_HTTP_SESSION.mount("http://", _adapter)
+GLOBAL_HTTP_SESSION.headers.update({
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Cache-Control": "no-cache", "Pragma": "no-cache"
+})
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "arsenal_data")
 QUOTES_FILE, FUTURES_FILE, CB_FILE = [os.path.join(DATA_DIR, f) for f in ("daily_quotes.csv", "futures_list.csv", "cb_list.csv")]
@@ -34,7 +47,7 @@ DEFAULT_SECTOR_STOCKS_MAP = {
 }
 
 # ==========================================
-# 1. 檔案讀寫與設定檔管理
+# 1. 檔案讀寫與設定檔管理 (含 Streamlit Secrets 雲端防失憶)
 # ==========================================
 def load_sector_map():
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -164,43 +177,30 @@ def calculate_cdp(high, low, close):
     return {"AH": round(cdp + pt, 2), "NH": round(2 * cdp - low, 2), "CDP": round(cdp, 2), "NL": round(2 * cdp - high, 2), "AL": round(cdp - pt, 2), "PT": round(pt, 2)}
 
 # ==========================================
-# 3. 技術指標、K線與盤前09:00時間閘門引擎
+# 3. 技術指標、三週期K線 (日K/60分K/5分K) 與盤前09:00時間閘門引擎
 # ==========================================
 def clean_holiday_phantom_bars(df_in, is_index=False):
-    """
-    【v9.9 關鍵修復】精準判斷台灣開盤時間 (09:00)：
-    1. 剔除週末六日 (weekday >= 5) 的異常佔位 K 棒
-    2. 若現在台灣時間尚未滿 09:00 (如週二早上8點多)，自動剔除當天尚未開盤的盤前空 K 棒，100% 保留前一個交易日 (如週一) 的完整 K 棒！
-    3. 針對個股剔除 Volume=0 且 High==Low 的國定假日假 K 棒 (大盤指數因 Yahoo Volume 常態為 0，不以 Volume 誤殺)
-    """
     if df_in.empty: return df_in
     df = df_in.copy()
-
-    # 1. 剔除週六、週日
     df = df[df.index.dayofweek < 5]
     if df.empty: return df
 
-    # 2. 台灣時間 09:00 開盤前保護閘門
     now_tw = pd.Timestamp.now(tz="Asia/Taipei")
     today_str = now_tw.strftime("%Y-%m-%d")
     is_pre_market = (now_tw.hour < 9)
 
     if len(df) > 1 and df.index[-1].strftime("%Y-%m-%d") == today_str:
         last_h, last_l, last_v = float(df["High"].iloc[-1]), float(df["Low"].iloc[-1]), float(df["Volume"].iloc[-1])
-        # 若尚未 09:00 開盤，或當日高低價完全相等且無量 (開盤前試撮佔位符)，剔除今日尚未開盤的假 K 棒
         if is_pre_market or (abs(last_h - last_l) < 1e-5 and last_v <= 0):
             df = df.iloc[:-1]
 
-    # 3. 針對個股剔除歷史休市日假 K 棒
     if not is_index:
         df = df[~((df["Volume"] <= 0) & ((df["High"] - df["Low"]).abs() < 1e-5))]
     else:
-        # 大盤指數僅剔除高低價完全為 0 或 High == Low 且與前日收盤完全相同的休市佔位棒
         if len(df) > 5:
             prev_c = df["Close"].shift(1)
             phantom_idx = ((df["High"] - df["Low"]).abs() < 1e-4) & ((df["Close"] - prev_c).abs() < 1e-4)
             df = df[~phantom_idx]
-
     return df
 
 def compute_td_sequential_and_bbands(df_in):
@@ -255,19 +255,15 @@ def calc_kd_rsi_macd(hist):
     return round(k_vals[-1], 1), round(d_vals[-1], 1), round(k_vals[-2], 1), round(d_vals[-2], 1), round(float(osc.iloc[-1]), 2), round(float(osc.iloc[-2]), 2) if len(osc)>=2 else 0.0, rsi14
 
 def fetch_kline_df_bypass_ssl(code, market_hint="TWSE", range_str="6mo"):
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Cache-Control": "no-cache", "Pragma": "no-cache"
-    }
     error_logs, is_idx = [], code in ["^TWII", "TAIEX"]
     symbols = ["%5ETWII"] if is_idx else [f"{code}{sfx}" for sfx in ([".TWO", ".TW"] if market_hint == "TPEX" else [".TW", ".TWO"])]
-    ts_bucket = int(time.time() // 180)  # 每 3 分鐘更換時間戳記，強制破除 Yahoo CDN 舊快取！
+    ts_bucket = int(time.time() // 180)
 
     for sym in symbols:
         for host in ["query2.finance.yahoo.com", "query1.finance.yahoo.com"]:
             try:
                 url = f"https://{host}/v8/finance/chart/{sym}?range={range_str}&interval=1d&includePrePost=false&_ts={ts_bucket}"
-                resp = requests.get(url, headers=headers, timeout=6, verify=False)
+                resp = GLOBAL_HTTP_SESSION.get(url, timeout=5, verify=False)
                 if resp.status_code == 200:
                     res_list = resp.json().get("chart", {}).get("result", [])
                     if res_list:
@@ -289,7 +285,7 @@ def fetch_kline_df_bypass_ssl(code, market_hint="TWSE", range_str="6mo"):
 
     try:
         start_dt = (pd.Timestamp.now() - pd.Timedelta(days=190 if range_str == "6mo" else 75)).strftime("%Y-%m-%d")
-        resp = requests.get("https://api.finmindtrade.com/api/v4/data", params={"dataset": "TaiwanStockPrice", "data_id": "TAIEX" if is_idx else code, "start_date": start_dt}, headers=headers, timeout=8, verify=False)
+        resp = GLOBAL_HTTP_SESSION.get("https://api.finmindtrade.com/api/v4/data", params={"dataset": "TaiwanStockPrice", "data_id": "TAIEX" if is_idx else code, "start_date": start_dt}, timeout=7, verify=False)
         if resp.status_code == 200 and resp.json().get("data"):
             df_fm = pd.DataFrame(resp.json()["data"])
             df_fm["Date"] = pd.to_datetime(df_fm["date"]).dt.tz_localize("Asia/Taipei")
@@ -307,13 +303,18 @@ def fetch_kline_df_bypass_ssl(code, market_hint="TWSE", range_str="6mo"):
     return pd.DataFrame(), " | ".join(error_logs[:2])
 
 @st.cache_data(ttl=180)
-def fetch_5m_intraday_kline(code, market_hint="TWSE"):
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", "Cache-Control": "no-cache"}
+def fetch_intraday_kline_full(code, market_hint="TWSE", interval="5m"):
+    """
+    【v10.0 全新升級】抓取 5分K (interval='5m', range='5d') 或 60分K (interval='60m', range='1mo')
+    並完整計算：5/20/60MA、布林上下軌(±2σ)、神奇九轉(TD9 1~9)、20根前扣抵價、KD 與 RSI！
+    """
+    range_str = "5d" if interval == "5m" else "1mo"
     ts_bucket = int(time.time() // 180)
     for sfx in ([".TWO", ".TW"] if market_hint == "TPEX" else [".TW", ".TWO"]):
         for host in ["query2.finance.yahoo.com", "query1.finance.yahoo.com"]:
             try:
-                resp = requests.get(f"https://{host}/v8/finance/chart/{code}{sfx}?range=5d&interval=5m&includePrePost=false&_ts={ts_bucket}", headers=headers, timeout=6, verify=False)
+                url = f"https://{host}/v8/finance/chart/{code}{sfx}?range={range_str}&interval={interval}&includePrePost=false&_ts={ts_bucket}"
+                resp = GLOBAL_HTTP_SESSION.get(url, timeout=5, verify=False)
                 if resp.status_code == 200:
                     res_list = resp.json().get("chart", {}).get("result", [])
                     if res_list:
@@ -321,17 +322,129 @@ def fetch_5m_intraday_kline(code, market_hint="TWSE"):
                         quote = res_list[0].get("indicators", {}).get("quote", [{}])[0]
                         if timestamps and "close" in quote:
                             dt_idx = pd.to_datetime(timestamps, unit="s", utc=True).tz_convert("Asia/Taipei")
-                            df_5m = pd.DataFrame({
-                                "TimeStr": dt_idx.strftime("%m/%d %H:%M"), "Open": quote.get("open", quote["close"]),
-                                "High": quote.get("high", quote["close"]), "Low": quote.get("low", quote["close"]),
-                                "Close": quote["close"], "Volume": quote.get("volume", [0]*len(timestamps))
+                            df_intra = pd.DataFrame({
+                                "DateStr": dt_idx.strftime("%m/%d %H:%M"),
+                                "ShortDate": dt_idx.strftime("%m/%d %H:%M"),
+                                "Open": quote.get("open", quote["close"]),
+                                "High": quote.get("high", quote["close"]),
+                                "Low": quote.get("low", quote["close"]),
+                                "Close": quote["close"],
+                                "Volume": quote.get("volume", [0]*len(timestamps))
                             }).dropna(subset=["Close"])
-                            df_5m["Volume"] = (df_5m["Volume"].fillna(0) / 1000.0).round(0)
-                            df_5m = df_5m[df_5m["Volume"] > 0]
-                            df_5m["MA20"] = df_5m["Close"].rolling(20).mean()
-                            if len(df_5m) >= 10: return df_5m.tail(120).to_dict("records")
+                            for col in ["Open", "High", "Low"]:
+                                df_intra[col] = df_intra[col].fillna(df_intra["Close"])
+                            df_intra["Volume"] = (df_intra["Volume"].fillna(0) / 1000.0).round(0)
+                            df_intra = df_intra[df_intra["Volume"] > 0].reset_index(drop=True)
+                            if len(df_intra) >= 15:
+                                df_intra = compute_td_sequential_and_bbands(df_intra)
+                                k_v, d_v, _, _, osc_v, _, rsi_v = calc_kd_rsi_macd(df_intra)
+                                latest = df_intra.iloc[-1]
+                                close_p = round(float(latest["Close"]), 2)
+                                ma5 = round(float(latest["MA5"]), 2) if pd.notna(latest["MA5"]) else close_p
+                                ma20 = round(float(latest["MA20"]), 2) if pd.notna(latest["MA20"]) else close_p
+                                ma60 = round(float(latest["MA60"]), 2) if pd.notna(latest["MA60"]) else ma20
+                                bb_up = round(float(latest["BB_Upper"]), 2) if pd.notna(latest["BB_Upper"]) else close_p
+                                bb_dn = round(float(latest["BB_Lower"]), 2) if pd.notna(latest["BB_Lower"]) else close_p
+                                deduct20 = round(float(df_intra["Close"].iloc[-20]), 2) if len(df_intra) >= 20 else close_p
+                                tail_n = 85 if interval == "5m" else 80
+                                return {
+                                    "ok": True, "interval": interval, "time_str": str(latest["DateStr"]),
+                                    "close": close_p, "ma5": ma5, "ma20": ma20, "ma60": ma60,
+                                    "bb_upper": bb_up, "bb_lower": bb_dn, "deduct": deduct20,
+                                    "td_buy": int(latest["TD_Buy"]), "td_sell": int(latest["TD_Sell"]),
+                                    "K": k_v, "D": d_v, "macd_osc": osc_v, "rsi": rsi_v,
+                                    "records": df_intra.tail(tail_n).to_dict("records")
+                                }
             except Exception: continue
-    return []
+    return {"ok": False, "interval": interval, "records": []}
+
+def evaluate_mtf_resonance(tech_1d, tech_60m, tech_5m, cdp_vals, bull_c="#FF6B6B", bear_c="#2ECC71", warn_c="#F1C40F"):
+    """
+    【v10.0 核心武器】自動比對「日K × 60分K × 5分K」三週期之均線扣抵、布林位階、神奇九轉與 KD 方向，產出共振實戰判讀！
+    """
+    cdp_p = cdp_vals["CDP"]
+    nh_p, nl_p = cdp_vals["NH"], cdp_vals["NL"]
+
+    def _parse_tf(t_obj, label, is_5m=False):
+        if not t_obj or not t_obj.get("ok"):
+            return {"週期": label, "趨勢與扣抵": "資料載入中", "布林通道位階": "-", "神奇九轉(TD9)": "-", "KD / RSI 動能": "-", "bias": 0, "td_b": 0, "td_s": 0}
+        c, m20, ded = t_obj["close"], t_obj["ma20"], t_obj["deduct"]
+        bb_u, bb_l = t_obj["bb_upper"], t_obj["bb_lower"]
+        tb, ts = t_obj["td_buy"], t_obj["td_sell"]
+        kv, dv, rv = t_obj["K"], t_obj["D"], t_obj["rsi"]
+
+        # 1. 趨勢與扣抵/CDP判定
+        if is_5m:
+            if c >= m20 and c >= cdp_p: trend_str, bias = f"🔴 站上20MA({m20}) & 站上CDP({cdp_p})", 1
+            elif c < m20 and c < cdp_p: trend_str, bias = f"🟢 跌破20MA({m20}) & 低於CDP({cdp_p})", -1
+            else: trend_str, bias = f"⚖️ 20MA({m20}) 與 CDP({cdp_p}) 間交戰", 0
+        else:
+            if c >= m20 and c >= ded: trend_str, bias = f"🔴 站上20MA({m20}) ＋ 扣抵({ded})助漲", 1
+            elif c < m20 and c < ded: trend_str, bias = f"🟢 跌破20MA({m20}) ＋ 扣抵({ded})反壓", -1
+            elif c >= m20: trend_str, bias = f"🟡 站上20MA({m20}) (惟扣抵{ded}較高)", 1
+            else: trend_str, bias = f"🟡 低於20MA({m20}) (惟扣抵{ded}在低檔)", -1
+
+        # 2. 布林通道位階
+        if c >= bb_u: bb_str = f"🔥 突破上軌 ({bb_u}) 強勢鈍化"
+        elif c <= bb_l: bb_str = f"🌱 觸及下軌 ({bb_l}) 超跌區"
+        elif c >= m20: bb_str = f"📈 中軌至上軌 ({bb_u}) 偏強區"
+        else: bb_str = f"📉 中軌至下軌 ({bb_l}) 整理區"
+
+        # 3. 神奇九轉
+        if tb >= 8: td_str = f"🔥 ▲低{tb} (短線超跌轉折訊號！)"
+        elif tb > 0: td_str = f"▲ 低九計數：第 {tb} 根"
+        elif ts >= 8: td_str = f"⚠️ ▼高{ts} (短線高檔衰竭警戒！)"
+        elif ts > 0: td_str = f"▼ 高九計數：第 {ts} 根"
+        else: td_str = "⚪ 無連續計數"
+
+        # 4. KD動能
+        kd_str = f"{'🔴金叉' if kv >= dv else '🟢死叉'} K({kv}) / D({dv}) ｜ RSI {rv}"
+        return {"週期": label, "趨勢與扣抵": trend_str, "布林通道位階": bb_str, "神奇九轉(TD9)": td_str, "KD / RSI 動能": kd_str, "bias": bias, "td_b": tb, "td_s": ts, "k_up": kv >= dv}
+
+    r_1d = _parse_tf(tech_1d, "📅 日 K (波段大方向)", is_5m=False)
+    r_60m = _parse_tf(tech_60m, "⏱️ 60分K (隔日/波段轉折)", is_5m=False)
+    r_5m = _parse_tf(tech_5m, "⚡ 5分K (當沖進出場扳機)", is_5m=True)
+
+    b1, b60, b5 = r_1d["bias"], r_60m["bias"], r_5m["bias"]
+    low_td_signals = [name for name, r in [("日K", r_1d), ("60分K", r_60m), ("5分K", r_5m)] if r["td_b"] >= 7]
+    high_td_signals = [name for name, r in [("日K", r_1d), ("60分K", r_60m), ("5分K", r_5m)] if r["td_s"] >= 7]
+
+    # 綜合共振提示邏輯
+    if b1 > 0 and b60 > 0 and b5 > 0:
+        title = "🔥 【三週期多方強勢共振】日K ＋ 60分K ＋ 5分K 同步站上均線與 CDP 分水嶺！"
+        color = bull_c
+        desc = f"目前大（日K）、中（60分K）、小（5分K）三個時間週期趨勢一致偏多！盤中只要守穩 **CDP 分水嶺（{cdp_p}元）** 或 **5分K之20MA（{tech_5m.get('ma20', cdp_p)}元）**，順勢偏多操作勝率最高，切勿逆勢摸頭猜頂。"
+    elif b1 > 0 and b60 > 0 and b5 <= 0:
+        title = "🎯 【長多短回洗盤格局】日K 與 60分K 波段偏多，5分K 盤中拉回測試支撐！"
+        color = warn_c
+        desc = f"大方向（日K與60分K）均線維持多頭保護，僅 5分K 短線拉回整理。這屬於標準「多頭趨勢中的盤中震盪洗盤」，可密切留意 **5分K 出現 ▲低8/低9**、觸及 **布林下軌（{tech_5m.get('bb_lower', nl_p)}元）** 或 **CDP 常態支撐 NL（{nl_p}元）** 後重新站回 5分K 均線的低接契機！"
+    elif b1 < 0 and b60 < 0 and b5 < 0:
+        if len(low_td_signals) >= 2:
+            title = f"🌱 【空方宣洩末端 × 多週期低九共振】({'＋'.join(low_td_signals)} 同步進入低九轉折區！)"
+            color = warn_c
+            desc = f"雖然三週期均線仍處空方壓制，但 **{' 與 '.join(low_td_signals)}** 已同步出現連續下跌第 7~9 根的動能衰竭訊號！此時追空極易被急彈軋到，空單宜逢低於 **NL（{nl_p}元）/ 布林下軌** 分批停利，搶反彈者可等 5分K 站回 20MA 再出手。"
+        else:
+            title = "❄️ 【三週期空方壓制共振】日K ＋ 60分K ＋ 5分K 同步受制於均線與 CDP 反壓！"
+            color = bear_c
+            desc = f"大中小三個週期同步處於空頭壓制結構，上方月線與 **CDP 分水嶺（{cdp_p}元）** 構成雙重蓋頭反壓。盤中若有反彈至 **5分K 20MA** 或 **NH 壓力（{nh_p}元）** 附近受阻，宜採取偏空避險或觀望策略，切忌盲目攤平接刀。"
+    elif b1 < 0 and (b60 > 0 or b5 > 0):
+        title = "⚡ 【跌深反彈搶短格局】日K 仍在月線下，但 60分K / 5分K 率先轉強站上均線！"
+        color = warn_c
+        desc = f"短線分K（5分K/60分K）已率先吹響反彈號角並站上短期均線，適合短線當沖做多搶反彈；但因日K大趨勢上方仍有 **日K月線（{tech_1d['ma20']}元）** 反壓，多單走到 **5分K/60分K 布林上軌** 或出現 **▼高8/高9** 時宜果斷分批停利！"
+    else:
+        title = "⚖️ 【多空週期交錯震盪】各週期方向尚未一致，宜依 CDP 支撐壓力與九轉訊號區間操作"
+        color = warn_c
+        desc = f"目前日K、60分K與5分K處於多空拉鋸整理。盤中當沖建議以 **CDP 分水嶺（{cdp_p}元）** 為強弱界線，往下靠近 **NL 支撐（{nl_p}元）＋ 5分K低九** 找支撐、往上靠近 **NH 壓力（{nh_p}元）＋ 5分K高九** 留意調節。"
+
+    if high_td_signals and b5 >= 0:
+        desc += f" ⚠️ **特別提醒：{'、'.join(high_td_signals)} 已進入 ▼高7~高9 高檔九轉區，短線追高需防乖離拉回！**"
+    elif low_td_signals and b5 <= 0:
+        desc += f" 💡 **特別提醒：{'、'.join(low_td_signals)} 已進入 ▲低7~低9 低檔九轉區，隨時留意破底翻止跌訊號！**"
+
+    return {"title": title, "color": color, "desc": desc, "table": [
+        {k: r[k] for k in ["週期", "趨勢與扣抵", "布林通道位階", "神奇九轉(TD9)", "KD / RSI 動能"]}
+        for r in (r_1d, r_60m, r_5m)
+    ]}
 
 @st.cache_data(ttl=300)
 def fetch_technical_indicators(code, market_hint="TWSE"):
@@ -358,13 +471,14 @@ def fetch_technical_indicators(code, market_hint="TWSE"):
 
     hist_60 = hist.tail(60).copy()
     hist_60["DateStr"] = hist_60.index.strftime("%Y-%m-%d")
+    hist_60["ShortDate"] = hist_60.index.strftime("%m-%d")
     return {
         "ok": True, "date": trade_date, "high": high_p, "low": low_p, "close": close_p,
         "ma5": ma5, "ma20": ma20, "ma60": ma60, "bb_upper": bb_up, "bb_lower": bb_dn,
         "td_buy": int(hist["TD_Buy"].iloc[-1]), "td_sell": int(hist["TD_Sell"].iloc[-1]),
         "deduct": deduct20, "deduct_date": deduct_date, "K": k_val, "D": d_val,
         "macd_osc": osc_today, "macd_prev": osc_prev, "rsi": rsi14, "vol_ratio": vol_ratio,
-        "kline_60": hist_60[["DateStr", "Open", "High", "Low", "Close", "Volume", "MA5", "MA20", "MA60", "BB_Upper", "BB_Lower", "TD_Buy", "TD_Sell", "TD_Buy_Disp", "TD_Sell_Disp"]].to_dict("records")
+        "kline_60": hist_60[["DateStr", "ShortDate", "Open", "High", "Low", "Close", "Volume", "MA5", "MA20", "MA60", "BB_Upper", "BB_Lower", "TD_Buy", "TD_Sell", "TD_Buy_Disp", "TD_Sell_Disp"]].to_dict("records")
     }
 
 @st.cache_data(ttl=3600)
@@ -373,7 +487,7 @@ def fetch_chip_data_20d(code, fm_token=""):
     try:
         params = {"dataset": "TaiwanStockInstitutionalInvestorsBuySell", "data_id": code, "start_date": (pd.Timestamp.now() - pd.Timedelta(days=50)).strftime("%Y-%m-%d")}
         if fm_token: params["token"] = fm_token
-        resp = requests.get("https://api.finmindtrade.com/api/v4/data", params=params, timeout=8, verify=False)
+        resp = GLOBAL_HTTP_SESSION.get("https://api.finmindtrade.com/api/v4/data", params=params, timeout=8, verify=False)
         if resp.status_code == 200 and resp.json().get("data"):
             df_c = pd.DataFrame(resp.json()["data"])
             last_20_dates = sorted(df_c["date"].unique())[-20:]
@@ -402,7 +516,7 @@ def fetch_margin_short_20d(code, fm_token=""):
     try:
         params = {"dataset": "TaiwanStockMarginPurchaseShortSale", "data_id": code, "start_date": (pd.Timestamp.now() - pd.Timedelta(days=50)).strftime("%Y-%m-%d")}
         if fm_token: params["token"] = fm_token
-        resp = requests.get("https://api.finmindtrade.com/api/v4/data", params=params, timeout=8, verify=False)
+        resp = GLOBAL_HTTP_SESSION.get("https://api.finmindtrade.com/api/v4/data", params=params, timeout=8, verify=False)
         if resp.status_code == 200 and resp.json().get("data"):
             df_20 = pd.DataFrame(resp.json()["data"]).sort_values("date").tail(20).copy()
             daily_rows = []
@@ -437,7 +551,7 @@ def fetch_market_breadth_and_fear_greed(fallback_fg=34):
         ("https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes", "SecuritiesCompanyCode", "Change")
     ]:
         try:
-            r_mkt = requests.get(url, headers=headers, timeout=8, verify=False)
+            r_mkt = GLOBAL_HTTP_SESSION.get(url, headers=headers, timeout=8, verify=False)
             if r_mkt.status_code == 200:
                 for it in r_mkt.json():
                     if not re.match(r"^\d{4}$", str(it.get(c_key, "")).strip()): continue
@@ -454,7 +568,7 @@ def fetch_market_breadth_and_fear_greed(fallback_fg=34):
 
     fg_score, fg_source = int(fallback_fg), "後台校準值"
     try:
-        r_cnn = requests.get("https://production.dataviz.cnn.io/index/fearandgreed/graphdata", headers=headers, timeout=5, verify=False)
+        r_cnn = GLOBAL_HTTP_SESSION.get("https://production.dataviz.cnn.io/index/fearandgreed/graphdata", headers=headers, timeout=5, verify=False)
         if r_cnn.status_code == 200:
             score_val = r_cnn.json().get("fear_and_greed", {}).get("score")
             if score_val is not None: fg_score, fg_source = int(round(float(score_val))), "CNN自動連線"
@@ -491,6 +605,7 @@ def fetch_taiex_market_data():
 
     hist_60 = hist.tail(60).copy()
     hist_60["DateStr"] = hist_60.index.strftime("%Y-%m-%d")
+    hist_60["ShortDate"] = hist_60.index.strftime("%m-%d")
     return {
         "ok": True, "date": hist.index[-1].strftime("%Y-%m-%d"), "close": close_p, "open": open_p, "chg": round(close_p - prev_close, 1),
         "high": high_p, "low": low_p, "ma5": ma5, "ma20": ma20, "ma60": ma60, "bias20": round(((close_p - ma20) / ma20) * 100.0, 2) if ma20 > 0 else 0.0,
@@ -498,11 +613,17 @@ def fetch_taiex_market_data():
         "k_pattern_str": " ｜ ".join(k_pattern_list), "has_long_shadow": has_long_lower_shadow, "is_bull_engulf": is_bull_engulf, "no_new_low": no_new_low,
         "td_buy": int(hist["TD_Buy"].iloc[-1]), "td_sell": int(hist["TD_Sell"].iloc[-1]), "K": k_val, "D": d_val, "prev_K": prev_k, "prev_D": prev_d, "rsi": rsi14,
         "deduct": round(float(hist["Close"].iloc[-20]), 1), "deduct_date": hist.index[-20].strftime("%Y-%m-%d"),
-        "kline_60": hist_60[["DateStr", "Open", "High", "Low", "Close", "MA5", "MA20", "MA60", "BB_Upper", "BB_Lower", "TD_Buy", "TD_Sell", "TD_Buy_Disp", "TD_Sell_Disp"]].to_dict("records")
+        "kline_60": hist_60[["DateStr", "ShortDate", "Open", "High", "Low", "Close", "MA5", "MA20", "MA60", "BB_Upper", "BB_Lower", "TD_Buy", "TD_Sell", "TD_Buy_Disp", "TD_Sell_Disp"]].to_dict("records")
     }
 
-@st.cache_data(ttl=1800)
+@st.cache_data(ttl=600)
 def scan_sector_performance(sector_map_json_str, margins_dict):
+    """
+    【v10.0 三重無損加速】
+    1. 維持 2mo 完整兩個月 K 線確保 20MA 永遠精準
+    2. 透過 GLOBAL_HTTP_SESSION (TCP 連線池) 省去 93 次重複 SSL 握手時間
+    3. 10 分鐘智慧快取 (ttl=600)，群友多人同時進站 0.01 秒秒開！
+    """
     sec_map = json.loads(sector_map_json_str)
     tasks = [(sec_name, item[0], item[1], item[2]) for sec_name, s_list in sec_map.items() for item in s_list]
     sector_records = {k: [] for k in sec_map.keys()}
@@ -544,38 +665,12 @@ def scan_sector_performance(sector_map_json_str, margins_dict):
     return sorted(summary_list, key=lambda x: x["近5日平均漲跌(%)"], reverse=True)
 
 @st.cache_data(ttl=1800)
-def scan_futures_leaderboard(codes_tuple, names_dict, margins_dict, markets_dict):
-    def _worker_fut(code):
-        sub, _ = fetch_kline_df_bypass_ssl(code, markets_dict.get(code, "TWSE"), range_str="2mo")
-        if sub.empty or len(sub) < 20: return None
-        close_p, prev_p = round(float(sub["Close"].iloc[-1]), 2), float(sub["Close"].iloc[-2])
-        ma5, ma20, deduct20 = round(float(sub["Close"].tail(5).mean()), 2), round(float(sub["Close"].tail(20).mean()), 2), round(float(sub["Close"].iloc[-20]), 2)
-        vol_ma5 = float(sub["Volume"].tail(5).mean())
-        group_type = "🔥 多方強勢突破" if (close_p >= ma20 and close_p >= deduct20) else ("❄️ 空方跌破避險" if (close_p < ma20 and close_p < deduct20) else "⚖️ 均線扣抵交錯震盪")
-        return {
-            "分類": group_type, "代號": code, "名稱": names_dict.get(code, code), "收盤價": close_p,
-            "單日漲跌%": round(((close_p - prev_p) / prev_p) * 100, 2) if prev_p > 0 else 0.0,
-            "當日量能比(倍)": round(float(sub["Volume"].iloc[-1]) / vol_ma5, 2) if vol_ma5 > 0 else 1.0,
-            "五日線(5MA)": ma5, "月線(20MA)": ma20, "與月線乖離%": round(((close_p - ma20) / ma20) * 100, 2),
-            "20日前扣抵價": deduct20, "扣抵狀態": "低檔助漲" if close_p >= deduct20 else "高檔反壓",
-            "1口保證金": int(close_p * 2000 * (float(margins_dict.get(code, 13.5)) / 100.0)), "保證金級距%": margins_dict.get(code, 13.5)
-        }
-    rows = []
-    with ThreadPoolExecutor(max_workers=16) as ex:
-        for fut in as_completed([ex.submit(_worker_fut, c) for c in codes_tuple]):
-            try:
-                res = fut.result()
-                if res: rows.append(res)
-            except Exception: continue
-    return pd.DataFrame(rows)
-
-@st.cache_data(ttl=1800)
 def fetch_stock_news(code, name):
     raw_items, headers = [], {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     bad_words = {"南亞": ["南亞科", "南亞電"], "台塑": ["台塑化"], "聯電": ["聯電集團"], "中鋼": ["中鋼構"], "長榮": ["長榮航", "長榮鋼", "長榮航太"], "陽明": ["陽明交大"], "富邦": ["富邦媒"]}.get(name, [])
     for q_str in [f'"{code}" "{name}" when:7d', f'"{name}" 股 when:7d', f'{code} {name}']:
         try:
-            resp = requests.get(f"https://news.google.com/rss/search?q={urllib.parse.quote(q_str)}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant", headers=headers, timeout=6, verify=False)
+            resp = GLOBAL_HTTP_SESSION.get(f"https://news.google.com/rss/search?q={urllib.parse.quote(q_str)}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant", headers=headers, timeout=6, verify=False)
             if resp.status_code == 200:
                 for item in ET.fromstring(resp.content).findall(".//item")[:25]:
                     title = item.find("title").text if item.find("title") is not None else ""
@@ -654,7 +749,7 @@ def extract_stocks_from_image_via_gemini(image_bytes, mime_type, api_key):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
     prompt = "請幫我從這張台股看盤或概念股截圖中，辨識出所有出現的台股 4 碼代號（或中文股票名稱）。請只回傳台股 4 碼代號或股票名稱，用逗號分隔即可，例如：2330, 2317, 3017, 奇鋐, 台積電"
     payload = {"contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": mime_type, "data": base64.b64encode(image_bytes).decode("utf-8")}}]}]}
-    resp = requests.post(url, json=payload, timeout=15, verify=False)
+    resp = GLOBAL_HTTP_SESSION.post(url, json=payload, timeout=15, verify=False)
     return resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip() if resp.status_code == 200 else ""
 
 def fetch_taifex_foreign_tx_oi_csv(fm_token=""):
@@ -715,7 +810,7 @@ def fetch_taifex_foreign_tx_oi_csv(fm_token=""):
         start_dt = (now_dt - pd.Timedelta(days=15)).strftime("%Y-%m-%d")
         params = {"dataset": "TaiwanFuturesInstitutionalInvestors", "data_id": "TX", "start_date": start_dt}
         if fm_token: params["token"] = fm_token
-        r_fm = requests.get("https://api.finmindtrade.com/api/v4/data", params=params, timeout=8, verify=False)
+        r_fm = GLOBAL_HTTP_SESSION.get("https://api.finmindtrade.com/api/v4/data", params=params, timeout=8, verify=False)
         if r_fm.status_code == 200 and r_fm.json().get("data"):
             df_f = pd.DataFrame(r_fm.json()["data"])
             sub_f = df_f[df_f["institutional_investors"].astype(str).str.contains("外資|Foreign", case=False, na=False)].sort_values("date")
@@ -734,7 +829,7 @@ def sync_market_institutional_online(fm_token=""):
     for d_back in range(0, 7):
         q_date = (now_dt - pd.Timedelta(days=d_back)).strftime("%Y%m%d")
         try:
-            r_spot = requests.get(f"https://www.twse.com.tw/rwd/zh/fund/BFI82U?response=json&dayDate={q_date}", headers=headers, timeout=6, verify=False)
+            r_spot = GLOBAL_HTTP_SESSION.get(f"https://www.twse.com.tw/rwd/zh/fund/BFI82U?response=json&dayDate={q_date}", headers=headers, timeout=6, verify=False)
             if r_spot.status_code == 200 and r_spot.json().get("stat") == "OK" and r_spot.json().get("data"):
                 f_amt = t_amt = d_amt = 0.0
                 for row in r_spot.json()["data"]:
@@ -751,7 +846,7 @@ def sync_market_institutional_online(fm_token=""):
     for d_back in range(0, 12):
         q_date = (now_dt - pd.Timedelta(days=d_back)).strftime("%Y%m%d")
         try:
-            r_mg = requests.get(f"https://www.twse.com.tw/rwd/zh/marginTrading/MI_MARGN?response=json&date={q_date}&selectType=MS", headers=headers, timeout=6, verify=False)
+            r_mg = GLOBAL_HTTP_SESSION.get(f"https://www.twse.com.tw/rwd/zh/marginTrading/MI_MARGN?response=json&date={q_date}&selectType=MS", headers=headers, timeout=6, verify=False)
             if r_mg.status_code == 200 and r_mg.json().get("stat") == "OK":
                 tables = r_mg.json().get("tables", [])
                 if tables and tables[0].get("data"):
@@ -798,7 +893,7 @@ def sync_stock_code_list_online():
         ("https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes", "TPEX", "SecuritiesCompanyCode", "CompanyName")
     ]:
         try:
-            r = requests.get(url, headers=headers, timeout=12, verify=False)
+            r = GLOBAL_HTTP_SESSION.get(url, headers=headers, timeout=12, verify=False)
             if r.status_code == 200:
                 for item in r.json():
                     code, name = str(item.get(c_key, "")).strip(), str(item.get(n_key, "")).strip()
@@ -814,7 +909,7 @@ def sync_stock_code_list_online():
 def sync_taifex_futures_online():
     headers, records = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}, {}
     try:
-        resp = requests.get("https://www.taifex.com.tw/cht/5/stockMargining", headers=headers, timeout=12, verify=False)
+        resp = GLOBAL_HTTP_SESSION.get("https://www.taifex.com.tw/cht/5/stockMargining", headers=headers, timeout=12, verify=False)
         resp.encoding = "utf-8"
         for r_html in re.findall(r"<tr[^>]*>(.*?)</tr>", resp.text, re.S):
             clean_txt = " ".join(re.sub(r"<[^>]+>", " ", r_html).split())
