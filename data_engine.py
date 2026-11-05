@@ -118,7 +118,13 @@ def read_csv_safely(filepath):
             return df
         except Exception: continue
     return pd.DataFrame()
-
+# 【自動滿血機制】若發現名冊只有預設的 9 檔（少於 500 檔），開機自動連線證交所/櫃買中心補齊 2,100+ 檔股票與 ETF！
+    try:
+        df_chk = read_csv_safely(QUOTES_FILE)
+        if len(df_chk) < 500:
+            sync_stock_code_list_online()
+    except Exception:
+        pass
 # ==========================================
 # 2. 升降檔位與當沖數學試算核心
 # ==========================================
