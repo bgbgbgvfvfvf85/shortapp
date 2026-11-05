@@ -1,4 +1,4 @@
-# 檔案名稱：data_engine.py (v10.0 三週期共振引擎 日K/60分K/5分K + TCP高速連線池 + 09:00時間閘門版)
+# 檔案名稱：data_engine.py (v10.1 自動滿血載入 2100+ 檔上市櫃股票與全品項ETF + 三週期共振引擎)
 import os, re, io, csv, json, math, time, base64, urllib.parse, urllib3, requests
 from requests.adapters import HTTPAdapter
 import xml.etree.ElementTree as ET
@@ -47,7 +47,7 @@ DEFAULT_SECTOR_STOCKS_MAP = {
 }
 
 # ==========================================
-# 1. 檔案讀寫與設定檔管理 (含 Streamlit Secrets 雲端防失憶)
+# 1. 檔案讀寫與設定檔管理 (含自動載入全台股 2100+ 檔股票與 ETF)
 # ==========================================
 def load_sector_map():
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -91,13 +91,67 @@ def load_config():
         except Exception: pass
     return cfg
 
+def read_csv_safely(filepath):
+    for enc in ["utf-8-sig", "utf-8", "big5", "cp950"]:
+        try:
+            df = pd.read_csv(filepath, encoding=enc)
+            if "代號" in df.columns: df["代號"] = df["代號"].astype(str).str.strip().str.replace(".0", "", regex=False)
+            return df
+        except Exception: continue
+    return pd.DataFrame()
+
+def sync_stock_code_list_online():
+    headers, stock_dict = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}, {}
+    # 完整收錄：所有 4 碼上市櫃普通股 + 所有 00 開頭之股票/高股息/債券(B)/槓反(L/R)/期貨(U)/主動型(A) ETF！
+    valid_pattern = re.compile(r"^(\d{4}|00\d{2,4}[A-Z]?)$")
+    for url, mkt, c_key, n_key in [
+        ("https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL", "TWSE", "Code", "Name"),
+        ("https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes", "TPEX", "SecuritiesCompanyCode", "CompanyName")
+    ]:
+        try:
+            r = GLOBAL_HTTP_SESSION.get(url, headers=headers, timeout=12, verify=False)
+            if r.status_code == 200:
+                for item in r.json():
+                    code, name = str(item.get(c_key, "")).strip(), str(item.get(n_key, "")).strip()
+                    if valid_pattern.match(code) and name:
+                        stock_dict[code] = {"代號": code, "名稱": name, "市場": mkt, "投本比": 0.0, "外本比": 0.0}
+        except Exception: pass
+    if len(stock_dict) > 500:
+        df_new = pd.DataFrame(list(stock_dict.values())).sort_values("代號")
+        df_new.to_csv(QUOTES_FILE, index=False, encoding="utf-8-sig")
+        return True, f"🎉 成功更新 {len(df_new)} 檔上市櫃股票與全品項 ETF 名冊！"
+    return False, "同步清單失敗，請稍後再試。"
+
+def sync_taifex_futures_online():
+    headers, records = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}, {}
+    try:
+        resp = GLOBAL_HTTP_SESSION.get("https://www.taifex.com.tw/cht/5/stockMargining", headers=headers, timeout=12, verify=False)
+        resp.encoding = "utf-8"
+        for r_html in re.findall(r"<tr[^>]*>(.*?)</tr>", resp.text, re.S):
+            clean_txt = " ".join(re.sub(r"<[^>]+>", " ", r_html).split())
+            m_code = re.search(r"\b(\d{4}|00\d{2,4}[A-Z]?)\b", clean_txt)
+            if m_code:
+                code = m_code.group(1)
+                rates = [float(x) for x in re.findall(r"(\d{2}\.\d{1,2})%", clean_txt) if 10.0 <= float(x) <= 50.0]
+                zh_match = re.search(r"([\u4e00-\u9fa5A-Za-z0-9]{2,8}期)", clean_txt)
+                fut_name = (zh_match.group(1) if zh_match else f"{code}期").replace("小型", "")
+                if code not in records:
+                    records[code] = {"代號": code, "期貨簡稱": fut_name, "標準期貨": "有", "小型期貨": "有" if "小型" in clean_txt else "無", "保證金比例": max(rates) if rates else 13.50}
+                else: records[code]["小型期貨"] = "有"
+    except Exception as e: return False, f"連線異常：{e}"
+    if records:
+        df_new = pd.DataFrame(list(records.values()))
+        df_new.to_csv(FUTURES_FILE, index=False, encoding="utf-8-sig")
+        return True, f"🎉 成功同步 {len(df_new)} 檔個股期貨與保證金級距！"
+    return False, "未能從期交所解析出資料。"
+
 def init_sample_csvs():
     os.makedirs(DATA_DIR, exist_ok=True)
     if not os.path.exists(QUOTES_FILE):
         pd.DataFrame([
             ["2330", "台積電", "TWSE", 0.0, 0.0], ["2383", "台光電", "TWSE", 0.0, 0.0], ["3017", "奇鋐", "TWSE", 0.0, 0.0],
-            ["2603", "長榮", "TWSE", 0.0, 0.0], ["1101", "台泥", "TWSE", 0.0, 0.0], ["1303", "南亞", "TWSE", 0.0, 0.0],
-            ["3189", "景碩", "TWSE", 0.0, 0.0], ["3037", "欣興", "TWSE", 0.0, 0.0], ["8358", "金居", "TPEX", 0.0, 0.0]
+            ["0050", "元大台灣50", "TWSE", 0.0, 0.0], ["0056", "元大高股息", "TWSE", 0.0, 0.0], ["00878", "國泰永續高股息", "TWSE", 0.0, 0.0],
+            ["00919", "群益台灣精選高息", "TWSE", 0.0, 0.0], ["00937B", "群益ESG投等債20+", "TPEX", 0.0, 0.0], ["00679B", "元大美債20年", "TPEX", 0.0, 0.0]
         ], columns=["代號", "名稱", "市場", "投本比", "外本比"]).to_csv(QUOTES_FILE, index=False, encoding="utf-8-sig")
     if not os.path.exists(FUTURES_FILE):
         pd.DataFrame([
@@ -110,21 +164,17 @@ def init_sample_csvs():
             ["2383", "23835", "台光電五", 585.0, 118.5, "2028-05-15"], ["3017", "30175", "奇鋐五", 630.0, 115.0, "2028-09-20"], ["2603", "26034", "長榮四", 195.0, 112.0, "2027-11-01"]
         ], columns=["代號", "CB代號", "CB名稱", "轉換價", "CB收盤價", "到期日"]).to_csv(CB_FILE, index=False, encoding="utf-8-sig")
 
-def read_csv_safely(filepath):
-    for enc in ["utf-8-sig", "utf-8", "big5", "cp950"]:
-        try:
-            df = pd.read_csv(filepath, encoding=enc)
-            if "代號" in df.columns: df["代號"] = df["代號"].astype(str).str.strip().str.replace(".0", "", regex=False)
-            return df
-        except Exception: continue
-    return pd.DataFrame()
-# 【自動滿血機制】若發現名冊只有預設的 9 檔（少於 500 檔），開機自動連線證交所/櫃買中心補齊 2,100+ 檔股票與 ETF！
+    # 【關鍵自動滿血】只要檢測到股票名冊少於 500 檔（例如只有預設的 9 檔），開機自動去證交所與櫃買中心抓滿 2,100+ 檔股票與 ETF！
     try:
-        df_chk = read_csv_safely(QUOTES_FILE)
-        if len(df_chk) < 500:
+        df_q = read_csv_safely(QUOTES_FILE)
+        if len(df_q) < 500:
             sync_stock_code_list_online()
+        df_f = read_csv_safely(FUTURES_FILE)
+        if len(df_f) < 50:
+            sync_taifex_futures_online()
     except Exception:
         pass
+
 # ==========================================
 # 2. 升降檔位與當沖數學試算核心
 # ==========================================
@@ -310,10 +360,6 @@ def fetch_kline_df_bypass_ssl(code, market_hint="TWSE", range_str="6mo"):
 
 @st.cache_data(ttl=180)
 def fetch_intraday_kline_full(code, market_hint="TWSE", interval="5m"):
-    """
-    【v10.0 全新升級】抓取 5分K (interval='5m', range='5d') 或 60分K (interval='60m', range='1mo')
-    並完整計算：5/20/60MA、布林上下軌(±2σ)、神奇九轉(TD9 1~9)、20根前扣抵價、KD 與 RSI！
-    """
     range_str = "5d" if interval == "5m" else "1mo"
     ts_bucket = int(time.time() // 180)
     for sfx in ([".TWO", ".TW"] if market_hint == "TPEX" else [".TW", ".TWO"]):
@@ -365,9 +411,6 @@ def fetch_intraday_kline_full(code, market_hint="TWSE", interval="5m"):
     return {"ok": False, "interval": interval, "records": []}
 
 def evaluate_mtf_resonance(tech_1d, tech_60m, tech_5m, cdp_vals, bull_c="#FF6B6B", bear_c="#2ECC71", warn_c="#F1C40F"):
-    """
-    【v10.0 核心武器】自動比對「日K × 60分K × 5分K」三週期之均線扣抵、布林位階、神奇九轉與 KD 方向，產出共振實戰判讀！
-    """
     cdp_p = cdp_vals["CDP"]
     nh_p, nl_p = cdp_vals["NH"], cdp_vals["NL"]
 
@@ -379,7 +422,6 @@ def evaluate_mtf_resonance(tech_1d, tech_60m, tech_5m, cdp_vals, bull_c="#FF6B6B
         tb, ts = t_obj["td_buy"], t_obj["td_sell"]
         kv, dv, rv = t_obj["K"], t_obj["D"], t_obj["rsi"]
 
-        # 1. 趨勢與扣抵/CDP判定
         if is_5m:
             if c >= m20 and c >= cdp_p: trend_str, bias = f"🔴 站上20MA({m20}) & 站上CDP({cdp_p})", 1
             elif c < m20 and c < cdp_p: trend_str, bias = f"🟢 跌破20MA({m20}) & 低於CDP({cdp_p})", -1
@@ -390,20 +432,17 @@ def evaluate_mtf_resonance(tech_1d, tech_60m, tech_5m, cdp_vals, bull_c="#FF6B6B
             elif c >= m20: trend_str, bias = f"🟡 站上20MA({m20}) (惟扣抵{ded}較高)", 1
             else: trend_str, bias = f"🟡 低於20MA({m20}) (惟扣抵{ded}在低檔)", -1
 
-        # 2. 布林通道位階
         if c >= bb_u: bb_str = f"🔥 突破上軌 ({bb_u}) 強勢鈍化"
         elif c <= bb_l: bb_str = f"🌱 觸及下軌 ({bb_l}) 超跌區"
         elif c >= m20: bb_str = f"📈 中軌至上軌 ({bb_u}) 偏強區"
         else: bb_str = f"📉 中軌至下軌 ({bb_l}) 整理區"
 
-        # 3. 神奇九轉
         if tb >= 8: td_str = f"🔥 ▲低{tb} (短線超跌轉折訊號！)"
         elif tb > 0: td_str = f"▲ 低九計數：第 {tb} 根"
         elif ts >= 8: td_str = f"⚠️ ▼高{ts} (短線高檔衰竭警戒！)"
         elif ts > 0: td_str = f"▼ 高九計數：第 {ts} 根"
         else: td_str = "⚪ 無連續計數"
 
-        # 4. KD動能
         kd_str = f"{'🔴金叉' if kv >= dv else '🟢死叉'} K({kv}) / D({dv}) ｜ RSI {rv}"
         return {"週期": label, "趨勢與扣抵": trend_str, "布林通道位階": bb_str, "神奇九轉(TD9)": td_str, "KD / RSI 動能": kd_str, "bias": bias, "td_b": tb, "td_s": ts, "k_up": kv >= dv}
 
@@ -415,7 +454,6 @@ def evaluate_mtf_resonance(tech_1d, tech_60m, tech_5m, cdp_vals, bull_c="#FF6B6B
     low_td_signals = [name for name, r in [("日K", r_1d), ("60分K", r_60m), ("5分K", r_5m)] if r["td_b"] >= 7]
     high_td_signals = [name for name, r in [("日K", r_1d), ("60分K", r_60m), ("5分K", r_5m)] if r["td_s"] >= 7]
 
-    # 綜合共振提示邏輯
     if b1 > 0 and b60 > 0 and b5 > 0:
         title = "🔥 【三週期多方強勢共振】日K ＋ 60分K ＋ 5分K 同步站上均線與 CDP 分水嶺！"
         color = bull_c
@@ -624,12 +662,6 @@ def fetch_taiex_market_data():
 
 @st.cache_data(ttl=600)
 def scan_sector_performance(sector_map_json_str, margins_dict):
-    """
-    【v10.0 三重無損加速】
-    1. 維持 2mo 完整兩個月 K 線確保 20MA 永遠精準
-    2. 透過 GLOBAL_HTTP_SESSION (TCP 連線池) 省去 93 次重複 SSL 握手時間
-    3. 10 分鐘智慧快取 (ttl=600)，群友多人同時進站 0.01 秒秒開！
-    """
     sec_map = json.loads(sector_map_json_str)
     tasks = [(sec_name, item[0], item[1], item[2]) for sec_name, s_list in sec_map.items() for item in s_list]
     sector_records = {k: [] for k in sec_map.keys()}
@@ -891,48 +923,3 @@ def auto_sync_market_chips_cached(fm_token=""):
         cfg.update(mkt_res)
         save_config(cfg)
     return cfg
-
-def sync_stock_code_list_online():
-    headers, stock_dict = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}, {}
-    # 允許所有 4 碼上市櫃股票 + 所有 00 開頭之台股/債券/槓反/主動型 ETF (含 B/R/L/U/A 結尾)
-    valid_pattern = re.compile(r"^(\d{4}|00\d{2,4}[A-Z]?)$")
-    for url, mkt, c_key, n_key in [
-        ("https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL", "TWSE", "Code", "Name"),
-        ("https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes", "TPEX", "SecuritiesCompanyCode", "CompanyName")
-    ]:
-        try:
-            r = GLOBAL_HTTP_SESSION.get(url, headers=headers, timeout=12, verify=False)
-            if r.status_code == 200:
-                for item in r.json():
-                    code, name = str(item.get(c_key, "")).strip(), str(item.get(n_key, "")).strip()
-                    if valid_pattern.match(code) and name:
-                        stock_dict[code] = {"代號": code, "名稱": name, "市場": mkt, "投本比": 0.0, "外本比": 0.0}
-        except Exception: pass
-    if len(stock_dict) > 500:
-        df_new = pd.DataFrame(list(stock_dict.values())).sort_values("代號")
-        df_new.to_csv(QUOTES_FILE, index=False, encoding="utf-8-sig")
-        return True, f"🎉 成功更新 {len(df_new)} 檔上市櫃股票與全品項 ETF 名冊！"
-    return False, "同步清單失敗，請稍後再試。"
-
-def sync_taifex_futures_online():
-    headers, records = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}, {}
-    try:
-        resp = GLOBAL_HTTP_SESSION.get("https://www.taifex.com.tw/cht/5/stockMargining", headers=headers, timeout=12, verify=False)
-        resp.encoding = "utf-8"
-        for r_html in re.findall(r"<tr[^>]*>(.*?)</tr>", resp.text, re.S):
-            clean_txt = " ".join(re.sub(r"<[^>]+>", " ", r_html).split())
-            m_code = re.search(r"\b(\d{4})\b", clean_txt)
-            if m_code:
-                code = m_code.group(1)
-                rates = [float(x) for x in re.findall(r"(\d{2}\.\d{1,2})%", clean_txt) if 10.0 <= float(x) <= 50.0]
-                zh_match = re.search(r"([\u4e00-\u9fa5]{2,6}期)", clean_txt)
-                fut_name = (zh_match.group(1) if zh_match else f"{code}期").replace("小型", "")
-                if code not in records:
-                    records[code] = {"代號": code, "期貨簡稱": fut_name, "標準期貨": "有", "小型期貨": "有" if "小型" in clean_txt else "無", "保證金比例": max(rates) if rates else 13.50}
-                else: records[code]["小型期貨"] = "有"
-    except Exception as e: return False, f"連線異常：{e}"
-    if records:
-        df_new = pd.DataFrame(list(records.values()))
-        df_new.to_csv(FUTURES_FILE, index=False, encoding="utf-8-sig")
-        return True, f"🎉 成功同步 {len(df_new)} 檔個股期貨與保證金級距！"
-    return False, "未能從期交所解析出資料。"
