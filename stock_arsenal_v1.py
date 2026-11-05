@@ -382,7 +382,7 @@ df_quotes, df_futures, df_cb = de.read_csv_safely(de.QUOTES_FILE), de.read_csv_s
 margins_global_map = dict(zip(df_futures["代號"].astype(str), df_futures["保證金比例"]))
 
 if not df_quotes.empty:
-    df_quotes = df_quotes[df_quotes["代號"].str.match(r"^(\d{4}|00\d+)$", na=False)].copy()
+    df_quotes = df_quotes[df_quotes["代號"].str.match(r"^(\d{4}|00\d{2,4}[A-Z]?)$", na=False)].copy()
     fut_codes = set(df_futures["代號"].astype(str))
     df_quotes["has_fut_sort"] = df_quotes["代號"].astype(str).apply(lambda x: 0 if x in fut_codes else 1)
     stock_options = [f"{r['代號']} {r['名稱']}" + (" ⚡[有期貨]" if str(r['代號']) in fut_codes else "") for _, r in df_quotes.sort_values(["has_fut_sort", "代號"]).iterrows()]
