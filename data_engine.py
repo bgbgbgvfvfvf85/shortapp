@@ -888,6 +888,8 @@ def auto_sync_market_chips_cached(fm_token=""):
 
 def sync_stock_code_list_online():
     headers, stock_dict = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}, {}
+    # 允許所有 4 碼上市櫃股票 + 所有 00 開頭之台股/債券/槓反/主動型 ETF (含 B/R/L/U/A 結尾)
+    valid_pattern = re.compile(r"^(\d{4}|00\d{2,4}[A-Z]?)$")
     for url, mkt, c_key, n_key in [
         ("https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL", "TWSE", "Code", "Name"),
         ("https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes", "TPEX", "SecuritiesCompanyCode", "CompanyName")
@@ -897,13 +899,13 @@ def sync_stock_code_list_online():
             if r.status_code == 200:
                 for item in r.json():
                     code, name = str(item.get(c_key, "")).strip(), str(item.get(n_key, "")).strip()
-                    if (re.match(r"^\d{4}$", code) or code.startswith("00")) and name:
+                    if valid_pattern.match(code) and name:
                         stock_dict[code] = {"代號": code, "名稱": name, "市場": mkt, "投本比": 0.0, "外本比": 0.0}
         except Exception: pass
-    if stock_dict:
+    if len(stock_dict) > 500:
         df_new = pd.DataFrame(list(stock_dict.values())).sort_values("代號")
         df_new.to_csv(QUOTES_FILE, index=False, encoding="utf-8-sig")
-        return True, f"🎉 成功更新 {len(df_new)} 檔上市櫃股票名冊！"
+        return True, f"🎉 成功更新 {len(df_new)} 檔上市櫃股票與全品項 ETF 名冊！"
     return False, "同步清單失敗，請稍後再試。"
 
 def sync_taifex_futures_online():
