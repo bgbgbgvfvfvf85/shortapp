@@ -1,4 +1,4 @@
-# 檔案名稱：data_engine.py (v11.0 極速精簡架構 + 機構級個股/大盤動態評分 + 全市場動態族群活水引擎)
+# 檔案名稱：data_engine.py (v11.2 實戰綜合總結引擎 + AH/NH/NL/AL四價位 + 極速精簡版)
 import os, re, io, csv, json, math, time, base64, urllib.parse, urllib3, requests
 from requests.adapters import HTTPAdapter
 import xml.etree.ElementTree as ET
@@ -43,7 +43,6 @@ DEFAULT_SECTOR_STOCKS_MAP = {
     "16. 貨櫃航運與塑化原物料": [["2603", "長榮", "TWSE"], ["2609", "陽明", "TWSE"], ["2615", "萬海", "TWSE"], ["1303", "南亞", "TWSE"], ["1101", "台泥", "TWSE"], ["2002", "中鋼", "TWSE"]]
 }
 
-# 官方產業名稱對應至 16 大核心戰略族群之智慧映射表 (供全市場新飆股自動歸隊)
 INDUSTRY_TO_SECTOR_BRIDGE = {
     "通信網路業": "4. CPO矽光子與光通訊", "光電業": "4. CPO矽光子與光通訊",
     "電腦及週邊設備業": "9. AI伺服器與組裝代工", "電機機械": "15. 重電電網與綠能儲能",
@@ -367,11 +366,6 @@ def fetch_technical_indicators(code, market_hint="TWSE"):
 
 @st.cache_data(ttl=3600)
 def fetch_fundamental_revenue_and_shareholding(code, fm_token=""):
-    """
-    【v11.0 機構級基本面與外本比引擎】
-    1. 抓取最近 16 個月營收，計算「最新月營收年增率 (YoY%)」與「近3月平均 YoY%」，得出『成長加速度 (ΔYoY)』！
-    2. 抓取外資持股比率變化 (真正的外本比增減%)！
-    """
     res = {"has_rev": False, "rev_month": "-", "yoy_latest": 0.0, "yoy_3m_avg": 0.0, "yoy_accel": 0.0, "mom_latest": 0.0, "foreign_hold_pct": 0.0, "foreign_hold_chg_5d": 0.0}
     if str(code).startswith("00"): return res
     try:
@@ -391,8 +385,7 @@ def fetch_fundamental_revenue_and_shareholding(code, fm_token=""):
                 if prev_y_v > 0:
                     yoy_list.append((row["ym"], round(((cur_v - prev_y_v) / prev_y_v) * 100.0, 2), cur_v))
             if len(yoy_list) >= 3:
-                yoy_latest = yoy_list[-1][1]
-                yoy_3m_avg = round(sum(x[1] for x in yoy_list[-3:]) / 3.0, 2)
+                yoy_latest, yoy_3m_avg = yoy_list[-1][1], round(sum(x[1] for x in yoy_list[-3:]) / 3.0, 2)
                 prev_m_v = yoy_list[-2][2]
                 mom_latest = round(((yoy_list[-1][2] - prev_m_v) / prev_m_v) * 100.0, 2) if prev_m_v > 0 else 0.0
                 res.update({"has_rev": True, "rev_month": yoy_list[-1][0], "yoy_latest": yoy_latest, "yoy_3m_avg": yoy_3m_avg, "yoy_accel": round(yoy_latest - yoy_3m_avg, 2), "mom_latest": mom_latest})
@@ -406,8 +399,7 @@ def fetch_fundamental_revenue_and_shareholding(code, fm_token=""):
         if r_sh.status_code == 200 and r_sh.json().get("data"):
             df_s = pd.DataFrame(r_sh.json()["data"]).sort_values("date")
             if len(df_s) >= 2:
-                latest_r = float(df_s["ForeignInvestmentSharesRatio"].iloc[-1])
-                prev5_r = float(df_s["ForeignInvestmentSharesRatio"].iloc[max(0, len(df_s)-6)])
+                latest_r, prev5_r = float(df_s["ForeignInvestmentSharesRatio"].iloc[-1]), float(df_s["ForeignInvestmentSharesRatio"].iloc[max(0, len(df_s)-6)])
                 res.update({"foreign_hold_pct": round(latest_r, 2), "foreign_hold_chg_5d": round(latest_r - prev5_r, 2)})
     except Exception: pass
     return res
@@ -458,16 +450,16 @@ def fetch_margin_short_20d(code, fm_token=""):
     return {"ok": False, "eligible": False, "periods": empty_m, "margin_bal": 0, "margin_chg": 0, "margin_util": 0.0, "short_bal": 0, "short_chg": 0, "short_margin_ratio": 0.0, "daily_table": []}
 
 # ==========================================
-# 4. 三週期共振、個股 4 維度評分 & 大盤 5 維度評分引擎
+# 4. 三週期共振、個股 4 維度評分 & 大盤 5 維度評分引擎 (含實戰綜合總結論)
 # ==========================================
 def evaluate_mtf_resonance(tech_1d, tech_60m, tech_5m, cdp_vals, bull_c="#FF6B6B", bear_c="#2ECC71", warn_c="#F1C40F"):
-    cdp_p, nh_p, nl_p = cdp_vals["CDP"], cdp_vals["NH"], cdp_vals["NL"]
+    ah_p, nh_p, nl_p, al_p = cdp_vals["AH"], cdp_vals["NH"], cdp_vals["NL"], cdp_vals["AL"]
     def _parse(t_obj, label, is_5m=False):
         if not t_obj or not t_obj.get("ok"):
             return {"週期": label, "趨勢與扣抵": "載入中", "布林通道位階": "-", "神奇九轉(TD9)": "-", "KD / RSI 動能": "-", "bias": 0, "td_b": 0, "td_s": 0}
         c, m20, ded, bbu, bbl, tb, ts, kv, dv, rv = t_obj["close"], t_obj["ma20"], t_obj["deduct"], t_obj["bb_upper"], t_obj["bb_lower"], t_obj["td_buy"], t_obj["td_sell"], t_obj["K"], t_obj["D"], t_obj["rsi"]
         if is_5m:
-            t_str, bias = (f"🔴 站上20MA({m20}) & CDP({cdp_p})", 1) if (c >= m20 and c >= cdp_p) else ((f"🟢 跌破20MA({m20}) & CDP({cdp_p})", -1) if (c < m20 and c < cdp_p) else (f"⚖️ 20MA 與 CDP 間交戰", 0))
+            t_str, bias = (f"🔴 站上20MA({m20}) & 守穩NL({nl_p})", 1) if (c >= m20 and c >= nl_p) else ((f"🟢 跌破20MA({m20}) & 弱勢整理", -1) if c < m20 else (f"⚖️ 20MA({m20}) 附近交戰", 0))
         else:
             t_str, bias = (f"🔴 站上20MA({m20})＋扣抵({ded})助漲", 1) if (c >= m20 and c >= ded) else ((f"🟢 跌破20MA({m20})＋扣抵({ded})反壓", -1) if (c < m20 and c < ded) else (f"🟡 站上20MA (扣抵{ded})" if c >= m20 else f"🟡 低於20MA (扣抵{ded})", 1 if c >= m20 else -1))
         bb_s = f"🔥 突破上軌({bbu})鈍化" if c >= bbu else (f"🌱 觸及下軌({bbl})超跌" if c <= bbl else (f"📈 中軌至上軌偏強" if c >= m20 else f"📉 中軌至下軌整理"))
@@ -478,117 +470,120 @@ def evaluate_mtf_resonance(tech_1d, tech_60m, tech_5m, cdp_vals, bull_c="#FF6B6B
     b1, b60, b5 = r1["bias"], r60["bias"], r5["bias"]
     low_tds = [n for n, r in [("日K", r1), ("60分K", r60), ("5分K", r5)] if r["td_b"] >= 7]
     if b1 > 0 and b60 > 0 and b5 > 0:
-        t, clr, d = "🔥 【三週期多方強勢共振】日K ＋ 60分K ＋ 5分K 同步站上均線與 CDP 分水嶺！", bull_c, f"大中小三週期趨勢一致偏多！盤中守穩 **CDP（{cdp_p}元）** 或 **5分K 20MA（{tech_5m.get('ma20', cdp_p)}元）** 順勢偏多勝率最高。"
+        t, clr, d = "🔥 【三週期多方強勢共振】日K ＋ 60分K ＋ 5分K 同步站上均線助漲！", bull_c, f"大中小三週期趨勢一致偏多！盤中拉回守穩 **5分K 20MA（{tech_5m.get('ma20', nl_p)}元）** 或 **NL常態支撐（{nl_p}元）** 順勢偏多勝率最高；上方壓力觀察 **NH（{nh_p}元）** 與 **AH（{ah_p}元）**。"
     elif b1 > 0 and b60 > 0 and b5 <= 0:
-        t, clr, d = "🎯 【長多短回洗盤格局】日K 與 60分K 波段偏多，5分K 盤中拉回測試支撐！", warn_c, f"波段均線維持多頭保護，僅 5分K 拉回洗盤。可留意 **5分K ▲低8/低9** 或觸及 **NL支撐（{nl_p}元）** 後重新站回均線之切入契機！"
+        t, clr, d = "🎯 【長多短回洗盤格局】日K 與 60分K 波段偏多，5分K 盤中拉回測試支撐！", warn_c, f"波段均線維持多頭保護，僅 5分K 短線拉回洗盤。重點觀察回測 **NL常態支撐（{nl_p}元）〜 AL極端破底（{al_p}元）** 或出現 **5分K ▲低8/低9** 時重新站回均線的低接契機！"
     elif b1 < 0 and b60 < 0 and b5 < 0:
-        if len(low_tds) >= 2: t, clr, d = f"🌱 【空方宣洩末端 × 多週期低九共振】({'＋'.join(low_tds)} 同步進入低九轉折區！)", warn_c, f"雖均線偏空，但 **{'與'.join(low_tds)}** 已同步出現連續下跌第 7~9 根衰竭訊號，空單宜於 **NL（{nl_p}元）** 附近停利，勿盲目追空！"
-        else: t, clr, d = "❄️ 【三週期空方壓制共振】日K ＋ 60分K ＋ 5分K 同步受制於均線與 CDP 反壓！", bear_c, f"三週期同步處於空頭壓制，反彈至 **CDP（{cdp_p}元）** 或 **NH壓力（{nh_p}元）** 受阻宜偏空避險或觀望。"
+        if len(low_tds) >= 2: t, clr, d = f"🌱 【空方宣洩末端 × 多週期低九共振】({'＋'.join(low_tds)} 同步進入低九轉折區！)", warn_c, f"雖均線偏空，但 **{'與'.join(low_tds)}** 已同步出現連續下跌第 7~9 根衰竭訊號，空單靠近 **NL（{nl_p}元）〜 AL（{al_p}元）** 宜分批停利，勿盲目追空！"
+        else: t, clr, d = "❄️ 【三週期空方壓制共振】日K ＋ 60分K ＋ 5分K 同步受制於均線反壓！", bear_c, f"三週期同步處於空頭壓制，盤中反彈至 **NH常態壓力（{nh_p}元）〜 AH（{ah_p}元）** 或 5分K 20MA 受阻時，宜偏空避險或觀望，切勿盲目接刀。"
     else:
-        t, clr, d = "⚖️ 【多空週期交錯震盪】各週期方向分歧，宜依 CDP 支撐壓力與九轉訊號區間操作", warn_c, f"建議以 **CDP（{cdp_p}元）** 為分水嶺，靠近 **NL（{nl_p}元）＋低九** 找支撐、靠近 **NH（{nh_p}元）＋高九** 留意調節。"
+        t, clr, d = "⚖️ 【多空週期交錯震盪】各週期方向分歧，宜依 AH/NH/NL/AL 區間與九轉操作", warn_c, f"目前長短週期方向分歧，盤中建議靠近下方 **NL支撐（{nl_p}元）／ AL（{al_p}元）＋低九** 找支撐、往上靠近 **NH壓力（{nh_p}元）／ AH（{ah_p}元）＋高九** 留意調節。"
     return {"title": t, "color": clr, "desc": d, "table": [{k: r[k] for k in ["週期", "趨勢與扣抵", "布林通道位階", "神奇九轉(TD9)", "KD / RSI 動能"]} for r in (r1, r60, r5)]}
 
 def evaluate_three_pillars(tech, chip, bull_c="#FF6B6B", bear_c="#2ECC71", warn_c="#F1C40F", tech_60m=None, tech_5m=None, margin_info=None, fund_info=None, taiex_info=None):
-    """
-    【v11.0 機構級個股 4 大維度 100 分制動態評分】
-    1. 相對大盤強弱 (Alpha) & 日K均線位階 (25分)
-    2. 三週期共振 (60分K/5分K) & 動能指標 (25分)
-    3. 投本比/外本比 (買賣超佔成交量控盤度% + 外資持股比變化) & 資券結構 (30分)
-    4. 月營收年增率加速度 (ΔYoY) & 高檔利多出盡防禦檢驗 (20分)
-    """
     c, ma5, ma20, ma60, ded = tech["close"], tech["ma5"], tech["ma20"], tech["ma60"], tech["deduct"]
     kv, dv, macd_osc, rsi = tech["K"], tech["D"], tech["macd_osc"], tech["rsi"]
     chg_1d, chg_5d = tech.get("chg_1d_pct", 0.0), tech.get("chg_5d_pct", 0.0)
     vol_5d_lots = max(1.0, tech.get("vol_5d_lots", 5000.0))
+    cdp_v = calculate_cdp(tech["high"], tech["low"], c)
 
-    # 計算對抗大盤 Alpha 值
     mkt_1d_pct = round((taiex_info["chg"] / max(1.0, taiex_info["close"] - taiex_info["chg"])) * 100.0, 2) if (taiex_info and taiex_info.get("ok")) else 0.0
     mkt_5d_pct = taiex_info.get("chg_5d_pct", 0.0) if (taiex_info and taiex_info.get("ok")) else 0.0
     alpha_1d, alpha_5d = round(chg_1d - mkt_1d_pct, 2), round(chg_5d - mkt_5d_pct, 2)
 
     breakdown = []
-
-    # 維度 1：相對大盤 Alpha 與日K趨勢 (25分)
     s_alpha = max(0, min(10, int(round(5.0 + alpha_1d * 1.2 + alpha_5d * 0.5))))
     s_ma = (4 if c >= ma5 else 0) + (6 if c >= ma20 else 0) + (2 if c >= ma60 else 0) + (3 if c >= ded else 0)
     d1_score = s_alpha + s_ma
     breakdown.append(("🛡️ 1. 相對大盤強弱(Alpha) & 日K均線", f"{d1_score} / 25 分", f"對抗大盤 Alpha：單日{alpha_1d:+.2f}% / 5日{alpha_5d:+.2f}% (+{s_alpha}分)｜均線5/20/60MA與扣抵 (+{s_ma}分)"))
 
-    # 維度 2：60分K/5分K 三週期共振 & 動能指標 (25分)
     s_60m = ((5 if tech_60m["close"] >= tech_60m["ma20"] else 0) + (3 if tech_60m["K"] >= tech_60m["D"] else 0)) if (tech_60m and tech_60m.get("ok")) else 4
     s_5m = ((4 if tech_5m["close"] >= tech_5m["ma20"] else 0) + (3 if tech_5m["K"] >= tech_5m["D"] else 0)) if (tech_5m and tech_5m.get("ok")) else 3
     s_ind = (4 if kv >= dv else (1 if kv < 20 else 0)) + (3 if macd_osc >= 0 else 0) + (3 if 50 <= rsi <= 78 else (1 if rsi > 78 else 0))
     d2_score = s_60m + s_5m + s_ind
     breakdown.append(("⚡ 2. 三週期(60分/5分K)共振 & 動能", f"{d2_score} / 25 分", f"60分K位階 (+{s_60m}分)｜5分K位階 (+{s_5m}分)｜日KD/MACD/RSI (+{s_ind}分)"))
 
-    # 維度 3：投本比/外本比 (主力成交量佔比%) & 資券結構 (30分)
     p_c = chip["periods"]
-    tot_1d, tot_3d, tot_5d, t_5d, f_5d = p_c[1]["tot"], p_c[3]["tot"], p_c[5]["tot"], p_c[5]["t"], p_c[5]["f"]
-    inst_vol_ratio = round((tot_5d / vol_5d_lots) * 100.0, 2)  # 法人近5日買賣超佔成交量比重 (%)
-    trust_vol_ratio = round((t_5d / vol_5d_lots) * 100.0, 2)   # 投信控盤度 (%)
+    tot_1d, tot_3d, tot_5d, t_5d = p_c[1]["tot"], p_c[3]["tot"], p_c[5]["tot"], p_c[5]["t"]
+    inst_vol_ratio = round((tot_5d / vol_5d_lots) * 100.0, 2)
+    trust_vol_ratio = round((t_5d / vol_5d_lots) * 100.0, 2)
     f_hold_chg = fund_info.get("foreign_hold_chg_5d", 0.0) if fund_info else 0.0
 
-    # 控盤含金量 (0~12分) + 近期1/3日加速度 (0~10分) + 資券乾淨度 (0~8分)
     s_conc = max(0, min(12, int(round(6.0 + inst_vol_ratio * 0.35 + (3.0 if trust_vol_ratio >= 3.0 else (1.5 if t_5d > 0 else 0.0)) + (2.0 if f_hold_chg > 0.2 else 0.0)))))
     s_accel = (5 if tot_1d > 0 else (2 if tot_1d == 0 else 0)) + (5 if tot_3d > 0 else (2 if tot_3d == 0 else 0))
     m_chg_5d = margin_info["periods"][5]["m_chg"] if (margin_info and margin_info.get("ok")) else 0
     sm_ratio = margin_info.get("short_margin_ratio", 0.0) if margin_info else 0.0
-    if tot_5d > 0 and m_chg_5d <= 0: s_mg = 8  # 法人買+融資減 (黃金籌碼)
-    elif tot_5d > 0 and m_chg_5d > 0: s_mg = 6 if sm_ratio >= 15 else 5
-    elif tot_5d <= 0 and m_chg_5d < 0: s_mg = 4
-    else: s_mg = 1  # 法人賣+融資增 (散戶接刀)
+    s_mg = 8 if (tot_5d > 0 and m_chg_5d <= 0) else ((6 if sm_ratio >= 15 else 5) if (tot_5d > 0 and m_chg_5d > 0) else (4 if (tot_5d <= 0 and m_chg_5d < 0) else 1))
     d3_score = s_conc + s_accel + s_mg
     breakdown.append(("💰 3. 外本比/投本比濃度 & 資券結構", f"{d3_score} / 30 分", f"5日法人佔成交量 {inst_vol_ratio:+.1f}% / 外資持股比增減 {f_hold_chg:+.2f}% (+{s_conc}分)｜近1/3日點火 (+{s_accel}分)｜5日融資{m_chg_5d:+,}張 (+{s_mg}分)"))
 
-    # 維度 4：月營收年增率加速度 (ΔYoY) & 高檔利多出盡檢驗 (20分)
+    rev_warn_str = ""
     if fund_info and fund_info.get("has_rev"):
         yoy, yoy_avg, accel = fund_info["yoy_latest"], fund_info["yoy_3m_avg"], fund_info["yoy_accel"]
         s_yoy = 8 if yoy >= 25 else (6 if yoy >= 10 else (4 if yoy > 0 else (2 if yoy > -10 else 0)))
         s_acc = 7 if accel >= 5.0 else (5 if accel >= 0 else (2 if accel > -10 else 0))
-        # 【利多出盡防禦檢驗】：若營收 YoY > 20% 看似很好，但股價卻跌破月線且近 5 日法人賣超 -> 判定為高檔利多鈍化/預期見頂，扣分警告！
         if yoy >= 15 and c < ma20 and tot_5d < 0:
-            s_react = 0
+            s_react, s_acc = 0, max(0, s_acc - 3)
             rev_note = f"⚠️ {fund_info['rev_month']}營收YoY {yoy:+.1f}%雖高，惟股價破月線+法人賣超 (嚴防高檔利多出盡！+0分)"
-            s_acc = max(0, s_acc - 3)
+            rev_warn_str = f"惟須注意 {fund_info['rev_month']} 營收年增率雖達 {yoy:+.1f}%，但股價跌破月線且法人調節，嚴防『利多出盡』。"
         elif yoy > 0 and c >= ma20:
             s_react = 5
             rev_note = f"✅ {fund_info['rev_month']}營收YoY {yoy:+.1f}% (較3月均{yoy_avg:+.1f}% {'加速' if accel>=0 else '降速'}{accel:+.1f}%)＋站穩月線 (+5分)"
+            rev_warn_str = f"基本面 {fund_info['rev_month']} 營收年增 {yoy:+.1f}%（較近3月均值{'加速' if accel>=0 else '微調'} {accel:+.1f}%），具業績保護。"
         else:
             s_react = 2
             rev_note = f"{fund_info['rev_month']}營收YoY {yoy:+.1f}%｜加速度 {accel:+.1f}%"
+            rev_warn_str = f"基本面 {fund_info['rev_month']} 營收年增 {yoy:+.1f}%（加速度 {accel:+.1f}%）。"
         d4_score = s_yoy + s_acc + s_react
         breakdown.append(("🚀 4. 營收YoY加速度 & 利多出盡檢驗", f"{d4_score} / 20 分", rev_note))
     else:
-        # ETF 或無營收資料時，按前 3 項得分比例換算滿分 20 分
         d4_score = int(round(((d1_score + d2_score + d3_score) / 80.0) * 20.0))
         breakdown.append(("🚀 4. 波動穩定度與規模權重 (ETF適用)", f"{d4_score} / 20 分", "本標的無月營收欄位，依技術與籌碼共振比例動態換算"))
 
     total = max(0, min(100, d1_score + d2_score + d3_score + d4_score))
 
-    if total >= 75:
-        verdict, v_color, v_desc = "🔥 機構級多方強勢共振（跑贏大盤 Alpha ＋ 三週期偏多 ＋ 法人高濃度控盤）", bull_c, f"白話結論：近期走勢明顯強於大盤（單日Alpha {alpha_1d:+.2f}%），且法人近5日買超佔成交量達 {inst_vol_ratio:+.1f}%，技術與籌碼高度集中。"
-    elif total >= 55:
-        verdict, v_color, v_desc = "📈 偏多順風結構（均線保護完整，留意分K拉回支撐切入點）", bull_c, f"白話結論：整體架構維持偏多，惟短線切勿追高乖離，可搭配下方 60分K/5分K 共振表等待拉回中軌或 CDP 支撐。"
-    elif total >= 40:
-        verdict, v_color, v_desc = "⚖️ 多空交戰拉鋸（技術與籌碼訊號分歧，宜區間靈活操作）", warn_c, f"白話結論：目前多空力量拉鋸（單日Alpha {alpha_1d:+.2f}%），若營收高檔但股價滯漲需防利多鈍化，適合依 CDP 高出低進。"
-    elif total >= 25:
-        verdict, v_color, v_desc = "⚠️ 短線轉弱警戒（均線反壓或法人調節，反彈宜減碼避險）", bear_c, f"白話結論：短線動能轉弱且受制於均線反壓，法人近5日佔成交量比重為 {inst_vol_ratio:+.1f}%，搶反彈務必嚴設停損。"
+    # 產出白話「實戰總結論與操作應對指南」
+    chip_dir = f"三大法人近5日買超 {tot_5d:+,} 張（最新1日 {tot_1d:+,} 張，佔成交量 {inst_vol_ratio:+.1f}%）" if tot_5d > 0 else f"三大法人近5日調節 {tot_5d:+,} 張（最新1日 {tot_1d:+,} 張，佔成交量 {inst_vol_ratio:+.1f}%）"
+    mg_dir = f"且5日融資減少 {abs(m_chg_5d):,} 張（籌碼流向法人安定）" if m_chg_5d < 0 else (f"惟5日融資增加 {m_chg_5d:,} 張（留意散戶浮額）" if m_chg_5d > 0 else "")
+
+    if total >= 70:
+        verdict = "🔥 機構級多方強勢共振（跑贏大盤 Alpha ＋ 均線助漲 ＋ 法人控盤）"
+        v_color = bull_c
+        v_desc = (
+            f"📌 **【看懂指標意義】**：目前股價站上月線（{ma20}元）且強於大盤（單日Alpha {alpha_1d:+.2f}%），{chip_dir}{mg_dir}。{rev_warn_str}\n"
+            f"🎯 **【後續動作與關鍵價位】**：大方向屬多頭順風，切忌在急拉衝高至 **NH常態壓力（{cdp_v['NH']}元）～ AH極端突破（{cdp_v['AH']}元）** 時追高；實戰上宜等待盤中 5分K 拉回測試 **NL常態支撐（{cdp_v['NL']}元）** 或 5分K 20MA 不破時順勢切入。"
+        )
+    elif total >= 50:
+        verdict = "📈 偏多震盪輪動（波段結構偏多，短線留意分K支撐與籌碼續航）"
+        v_color = bull_c
+        v_desc = (
+            f"📌 **【看懂指標意義】**：目前中長線結構仍維持偏多（月線 {ma20}元、單日Alpha {alpha_1d:+.2f}%），{chip_dir}{mg_dir}。{rev_warn_str}\n"
+            f"🎯 **【後續動作與關鍵價位】**：屬偏多但短線有震盪洗盤需求，建議盯緊 60分K 與 5分K 是否同步守穩均線。下檔防守點看 **NL常態支撐（{cdp_v['NL']}元）** 與 **AL極端破底（{cdp_v['AL']}元）**，上檔過 **NH壓力（{cdp_v['NH']}元）** 需有量能配合。"
+        )
+    elif total >= 35:
+        verdict = "⚖️ 多空交戰拉鋸（技術與籌碼訊號分歧，宜區間靈活應對）"
+        v_color = warn_c
+        v_desc = (
+            f"📌 **【看懂指標意義】**：目前技術面與法人籌碼出現分歧（月線 {ma20}元、{chip_dir}），缺乏一致性的單邊動能。{rev_warn_str}\n"
+            f"🎯 **【後續動作與關鍵價位】**：不宜盲目追漲殺跌，建議採箱型區間操作——回測下方 **NL常態支撐（{cdp_v['NL']}元）～ AL（{al_p if 'al_p' in locals() else cdp_v['AL']}元）** 且 5分K 出低九轉折時找短多機會；反彈靠近 **NH常態壓力（{cdp_v['NH']}元）～ AH（{cdp_v['AH']}元）** 見高九受阻則先行調節。"
+        )
     else:
-        verdict, v_color, v_desc = "❄️ 極度弱勢修正（三週期破線 ＋ 法人提款散戶接刀，切勿盲目摸底）", bear_c, f"白話結論：趨勢、分K動能與法人籌碼同步偏空，在 60分K/5分K 尚未出現明確低九止跌並站回均線前，宜保守觀望或偏空避險。"
+        verdict = "❄️ 空方壓制修正警戒（均線反壓 ＋ 法人提款，反彈宜保守避險）"
+        v_color = bear_c
+        v_desc = (
+            f"📌 **【看懂指標意義】**：目前股價受制於月線（{ma20}元）反壓且弱於大盤（單日Alpha {alpha_1d:+.2f}%），{chip_dir}{mg_dir}，短線賣壓沉重。{rev_warn_str}\n"
+            f"🎯 **【後續動作與關鍵價位】**：在尚未帶量站回 60分K 20MA 與日K五日線（{ma5}元）前，切勿盲目摸底接刀！盤中若反彈至 **NH常態壓力（{cdp_v['NH']}元）～ AH（{cdp_v['AH']}元）** 遇壓宜減碼或偏空避險；下檔極端宣洩支撐觀察 **NL（{cdp_v['NL']}元）** 與 **AL（{cdp_v['AL']}元）**。"
+        )
 
     return {"total": total, "t_score": d1_score, "m_score": d2_score, "c_score": d3_score, "f_score": d4_score, "alpha_1d": alpha_1d, "alpha_5d": alpha_5d, "inst_vol_ratio": inst_vol_ratio, "verdict": verdict, "v_color": v_color, "v_desc": v_desc, "breakdown": breakdown}
 
 @st.cache_data(ttl=900)
 def fetch_macro_fx_and_sox(taiex_hist_df=None):
-    """
-    【v11.0 總經活水引擎】抓取新台幣匯率 (TWD=X) 與美股費城半導體 (^SOX)，並計算與台股近 20 日滾動相關係數 (r)！
-    """
     res = {"fx_rate": 32.15, "fx_chg_5d": 0.0, "fx_ma20": 32.15, "sox_close": 5000.0, "sox_chg_1d_pct": 0.0, "sox_ma20": 5000.0, "sox_corr_20d": 0.65}
     try:
         df_fx, _ = fetch_kline_df_bypass_ssl("TWD=X", range_str="2mo")
         if not df_fx.empty and len(df_fx) >= 6:
-            fx_c = round(float(df_fx["Close"].iloc[-1]), 3)
-            fx_p5 = float(df_fx["Close"].iloc[-6])
+            fx_c, fx_p5 = round(float(df_fx["Close"].iloc[-1]), 3), float(df_fx["Close"].iloc[-6])
             res.update({"fx_rate": fx_c, "fx_chg_5d": round(fx_c - fx_p5, 3), "fx_ma20": round(float(df_fx["Close"].tail(20).mean()), 3)})
     except Exception: pass
     try:
@@ -607,29 +602,23 @@ def fetch_macro_fx_and_sox(taiex_hist_df=None):
     return res
 
 def evaluate_taiex_market_score(taiex, cfg, breadth_fg, macro_info=None, bull_c="#FF6B6B", bear_c="#2ECC71", warn_c="#F1C40F"):
-    """
-    【v11.0 大盤 5 大維度 100 分制動態評分 (含新台幣匯率活水 + 費半 20 日相關係數動態權重)】
-    """
     c, ma5, ma20, ma60, ded = taiex["close"], taiex["ma5"], taiex["ma20"], taiex["ma60"], taiex["deduct"]
     chg, bias20, kv, dv = taiex["chg"], taiex["bias20"], taiex["K"], taiex["D"]
     chg_pct = round((chg / max(1.0, c - chg)) * 100.0, 2)
     sp_f, sp_t, sp_d = float(cfg.get("mkt_spot_foreign", 0.0)), float(cfg.get("mkt_spot_trust", 0.0)), float(cfg.get("mkt_spot_dealer", 0.0))
     sp_tot = round(sp_f + sp_t + sp_d, 2)
-    foi, foi_chg, m_chg = int(cfg.get("mkt_foreign_oi", -30000)), int(cfg.get("mkt_foreign_oi_chg", 0)), float(cfg.get("mkt_margin_chg", 0.0))
+    foi, foi_chg, m_chg, m_chg3 = int(cfg.get("mkt_foreign_oi", -30000)), int(cfg.get("mkt_foreign_oi_chg", 0)), float(cfg.get("mkt_margin_chg", 0.0)), float(cfg.get("mkt_margin_chg_3d", 0.0))
     up_ratio, fg_score = float(breadth_fg.get("up_ratio", 50.0)), int(breadth_fg.get("fg_score", 50))
     macro = macro_info or {"fx_rate": 32.15, "fx_chg_5d": 0.0, "fx_ma20": 32.15, "sox_close": 5000.0, "sox_chg_1d_pct": 0.0, "sox_ma20": 5000.0, "sox_corr_20d": 0.65}
+    mkt_cdp = calculate_cdp(taiex["high"], taiex["low"], c)
 
     breakdown = []
-
-    # 1. 台幣匯率活水 & 費半動態相關性 (15分)
-    # TWD=X 數值下跌代表「新台幣升值(資金流入)」，數值上漲代表「新台幣貶值(資金外流)」
     fx_c, fx_chg5, fx_m20 = macro["fx_rate"], macro["fx_chg_5d"], macro["fx_ma20"]
     s_fx = (5 if fx_chg5 <= 0 else (2 if fx_chg5 < 0.15 else 0)) + (3 if fx_c <= fx_m20 else 0)
     corr_r, sox_c, sox_m20, sox_chg = macro["sox_corr_20d"], macro["sox_close"], macro["sox_ma20"], macro["sox_chg_1d_pct"]
     raw_sox_score = (4 if sox_c >= sox_m20 else 0) + max(0, min(3, int(round(sox_chg + 1.5))))
     if corr_r >= 0.55:
-        s_sox = raw_sox_score
-        sox_note = f"費半 {sox_chg:+.2f}% (20日高相關 r={corr_r} ➔ 全權重 +{s_sox}分)"
+        s_sox, sox_note = raw_sox_score, f"費半 {sox_chg:+.2f}% (20日高相關 r={corr_r} ➔ 全權重 +{raw_sox_score}分)"
     elif corr_r >= 0.25:
         s_sox = int(round(raw_sox_score * 0.5 + (3.5 if c >= ma5 else 1.0) * 0.5))
         sox_note = f"費半 {sox_chg:+.2f}% (中度相關 r={corr_r} ➔ 折半權重 +{s_sox}分)"
@@ -639,20 +628,17 @@ def evaluate_taiex_market_score(taiex, cfg, breadth_fg, macro_info=None, bull_c=
     macro_score = s_fx + s_sox
     breakdown.append(("🌎 1. 新台幣匯率活水 & 費半相關性 (滿分15)", f"{macro_score} / 15 分", f"台幣匯率 {fx_c} ({'升值熱錢流入' if fx_chg5<=0 else '貶值外流'} 5日{fx_chg5:+.2f}元 ➔ +{s_fx}分)｜{sox_note}"))
 
-    # 2. 均線與扣抵位階 (25分)
     s_ma = (5 if c >= ma5 else 0) + (8 if c >= ma20 else 0) + (4 if c >= ma60 else 0) + (3 if c >= ded else 0)
     s_bias = max(0, min(5, int(round((bias20 + 6.0) / 1.8))))
     t_score = s_ma + s_bias
     breakdown.append(("📈 2. 大盤均線與乖離位階 (滿分25)", f"{t_score} / 25 分", f"5/20/60MA與扣抵 (+{s_ma}分)｜月線乖離率 {bias20:+.2f}% (+{s_bias}分)"))
 
-    # 3. 單日漲跌與轉折動能 (15分)
     s_chg = max(0, min(9, int(round((chg_pct + 2.5) * 2.0))))
     s_kd = 3 if kv >= dv else (1 if kv < 20 else 0)
     s_bb = 3 if c >= taiex["bb_lower"] else (2 if taiex.get("has_long_shadow") else 0)
     m_score = s_chg + s_kd + s_bb
     breakdown.append(("⚡ 3. 單日漲跌幅與K棒動能 (滿分15)", f"{m_score} / 15 分", f"單日 {chg:+.1f}點 ({chg_pct:+.2f}% ➔ +{s_chg}分)｜KD (+{s_kd}分)｜布林與下影線 (+{s_bb}分)"))
 
-    # 4. 三大法人期現貨 & 資券 (30分)
     s_sp_tot = max(0, min(12, int(round((sp_tot + 600.0) / 80.0))))
     s_sp_f = max(0, min(4, int(round((sp_f + 300.0) / 120.0))))
     s_sp_t = 2 if sp_t > 0 else 0
@@ -661,40 +647,52 @@ def evaluate_taiex_market_score(taiex, cfg, breadth_fg, macro_info=None, bull_c=
     c_score = s_sp_tot + s_sp_f + s_sp_t + s_foi + s_mg
     breakdown.append(("🏛️ 4. 法人期現貨百億級距 & 資券 (滿分30)", f"{c_score} / 30 分", f"現貨合計 {sp_tot:+.1f}億 (+{s_sp_tot+s_sp_f+s_sp_t}分)｜外資期貨 {foi:,}口/單日{foi_chg:+,} (+{s_foi}分)｜融資 {m_chg:+.1f}億 (+{s_mg}分)"))
 
-    # 5. 騰落廣度與情緒 (15分)
     s_br = max(0, min(10, int(round(up_ratio / 10.0))))
     s_fg = max(0, min(5, int(round(fg_score / 20.0))))
     b_score = s_br + s_fg
     breakdown.append(("🌡️ 5. 上市櫃騰落廣度 & 恐慌情緒 (滿分15)", f"{b_score} / 15 分", f"上漲家數佔比 {up_ratio}% (+{s_br}分)｜CNN情緒 {fg_score} (+{s_fg}分)"))
 
     total = max(0, min(100, macro_score + t_score + m_score + c_score + b_score))
-    if total >= 75: light, clr, ct, cb = "🟢 綠燈｜多頭強勢順風（匯率熱錢流入＋均線助漲＋法人推升）", bull_c, "🔥 大盤處於多方強勢順風區！想掌握今日領漲主流股的切入位階嗎？", "💬 點此私訊您的專屬營業員：索取【今日主流強勢股深度籌碼清單】"
-    elif total >= 55: light, clr, ct, cb = "🟢 偏多綠黃燈｜多方控盤輪動（守穩支撐，主流族群輪動表現）", bull_c, "📈 大盤維持偏多輪動格局！想檢視手中持股是否在主流資金軌道上嗎？", "💬 點此私訊您的專屬營業員：預約【持股強弱診斷與主流換股討論】"
-    elif total >= 40: light, clr, ct, cb = "🟡 黃燈｜多空交戰拉鋸（均線與籌碼分歧，宜選股不選市）", warn_c, "🛡️ 大盤處於多空交戰拉鋸區！想了解如何利用短線當沖或期貨避險靈活應對嗎？", "💬 點此私訊您的專屬營業員：預約【1對1 持股健檢 & 短線操作策略討論】"
-    elif total >= 25: light, clr, ct, cb = "🟠 橘紅燈｜空方修正警戒（跌破月線＋資金調節，留意反壓與避險）", bear_c, "⚠️ 大盤處於空方修正階段！想討論如何運用個股期貨避險或保留現金部位嗎？", "💬 點此私訊您的專屬營業員：索取【空方避險策略與弱勢股汰弱留強建議】"
-    else: light, clr, ct, cb = "🚨 紅燈｜空方極度宣洩／超跌警戒（負乖離過大＋融資清洗，緊盯止跌轉折）", bear_c, "🚨 盤勢進入急跌宣洩與融資清洗階段！想掌握大盤何時出現破底翻止跌訊號嗎？", "💬 點此私訊您的專屬營業員：預約【持股壓力測試 & 超跌反彈布局討論】"
-    return {"total": total, "light": light, "color": clr, "cta_title": ct, "cta_btn": cb, "breakdown": breakdown, "macro": macro}
+
+    # 大盤實戰綜合總結論 (白話解讀這5個維度代表什麼意義、現在要注意什麼)
+    fx_meaning = f"新台幣匯率 {fx_c}（近5日{fx_chg5:+.2f}元，{'外資熱錢留台支撐' if fx_chg5<=0 else '短線資金有匯出壓力'}）"
+    chip_meaning = f"三大法人現貨合計 {sp_tot:+.1f} 億（外資期貨未平倉 {foi:,} 口，單日 {foi_chg:+,} 口），上市櫃上漲家數佔比 {up_ratio}%"
+    if total >= 70:
+        light, clr = "🟢 綠燈｜多頭強勢順風（匯率熱錢流入＋均線助漲＋法人推升）", bull_c
+        summary_action = f"📌 **【大盤總結論與實戰意義】**：目前指數站穩月線（{ma20:,}點）且 {fx_meaning}，{chip_meaning}，市場賺錢效應極佳！\n🎯 **【後續動作提醒】**：順風盤可積極從下方主流族群挑選跑贏大盤（正Alpha）的領頭羊操作；明日大盤支撐看 **NL（{mkt_cdp['NL']:,}點）**，壓力看 **NH（{mkt_cdp['NH']:,}點）** 與 **AH（{mkt_cdp['AH']:,}點）**。"
+        ct, cb = "🔥 大盤處於多方強勢順風區！想掌握今日領漲主流股的切入位階嗎？", "💬 點此私訊您的專屬營業員：索取【今日主流強勢股深度籌碼清單】"
+    elif total >= 50:
+        light, clr = "🟢 偏多綠黃燈｜多方控盤輪動（守穩支撐，主流族群輪動表現）", bull_c
+        summary_action = f"📌 **【大盤總結論與實戰意義】**：目前大盤結構維持偏多（月線 {ma20:,}點，乖離 {bias20:+.2f}%），{fx_meaning}，{chip_meaning}。代表指數空間雖溫和，但內資與個股輪動非常活絡！\n🎯 **【後續動作提醒】**：採取「重個股、輕指數」策略，鎖定下方帶有 🔥 標記的動態入榜強勢股，趁盤中回測支撐布局；大盤下檔防守看 **NL（{mkt_cdp['NL']:,}點）**，上檔觀察 **NH（{mkt_cdp['NH']:,}點）**。"
+        ct, cb = "📈 大盤維持偏多輪動格局！想檢視手中持股是否在主流資金軌道上嗎？", "💬 點此私訊您的專屬營業員：預約【持股強弱診斷與主流換股討論】"
+    elif total >= 35:
+        light, clr = "🟡 黃燈｜多空交戰拉鋸（均線與籌碼分歧，宜選股不選市）", warn_c
+        summary_action = f"📌 **【大盤總結論與實戰意義】**：目前指數與籌碼訊號分歧（月線 {ma20:,}點，{fx_meaning}，{chip_meaning}），多空在關鍵均線附近激烈交戰，追高容易被洗！\n🎯 **【後續動作提醒】**：資金控管宜維持 5 成以下，淘汰破線弱勢股，僅針對有法人買超且守穩月線的抗跌股做短線區間應對；大盤區間重點盯緊下檔 **NL（{mkt_cdp['NL']:,}點）～ AL（{mkt_cdp['AL']:,}點）** 與上檔 **NH（{mkt_cdp['NH']:,}點）**。"
+        ct, cb = "🛡️ 大盤處於多空交戰拉鋸區！想了解如何利用短線當沖或期貨避險靈活應對嗎？", "💬 點此私訊您的專屬營業員：預約【1對1 持股健檢 & 短線操作策略討論】"
+    else:
+        light, clr = "🚨 紅燈｜空方修正／超跌警戒（破線提款＋融資清洗，緊盯止跌訊號）", bear_c
+        summary_action = f"📌 **【大盤總結論與實戰意義】**：目前大盤跌破月線（{ma20:,}點，負乖離 {bias20:+.2f}%），{fx_meaning}，{chip_meaning}，融資近3日累計 {m_chg3:+.1f} 億，盤勢處於空方宣洩與浮額清洗階段！\n🎯 **【後續動作提醒】**：在尚未同時出現「①重新站回5MA（{ma5:,}點）或布林下軌、②外資期貨空單回補、③融資大幅減肥」三大止跌訊號前，多看少做或利用個股期避險；明日下檔支撐觀察 **NL（{mkt_cdp['NL']:,}點）** 與 **AL（{mkt_cdp['AL']:,}點）**，反彈壓力看 **NH（{mkt_cdp['NH']:,}點）**。"
+        ct, cb = "🚨 盤勢進入急跌宣洩與融資清洗階段！想掌握大盤何時出現破底翻止跌訊號嗎？", "💬 點此私訊您的專屬營業員：預約【持股壓力測試 & 超跌反彈布局討論】"
+
+    return {"total": total, "light": light, "color": clr, "summary_action": summary_action, "cta_title": ct, "cta_btn": cb, "breakdown": breakdown, "macro": macro}
 
 # ==========================================
 # 5. 全市場 2,100 檔產業分類與 16 大族群動態活水引擎
 # ==========================================
 @st.cache_data(ttl=86400)
 def fetch_all_stock_industry_map():
-    """抓取全市場上市櫃公司之官方產業分類，讓全市場任一檔新飆股都能 100% 歸入對應族群！"""
     ind_map = {}
     try:
         r = GLOBAL_HTTP_SESSION.get("https://api.finmindtrade.com/api/v4/data", params={"dataset": "TaiwanStockInfo"}, timeout=7, verify=False)
         if r.status_code == 200 and r.json().get("data"):
             for it in r.json()["data"]:
                 c, cat = str(it.get("stock_id", "")).strip(), str(it.get("industry_category", "")).strip()
-                if re.match(r"^\d{4}$", c) and cat and cat not in ["Index", "ETF", "大盤"]:
-                    ind_map[c] = cat
+                if re.match(r"^\d{4}$", c) and cat and cat not in ["Index", "ETF", "大盤"]: ind_map[c] = cat
     except Exception: pass
     return ind_map
 
 @st.cache_data(ttl=600)
 def fetch_full_market_snapshot_and_breadth(fallback_fg=34):
-    """一次連線取得全市場上市櫃 2,100 檔最新收盤、單日漲跌幅、成交金額與騰落家數 (耗時僅 0.8 秒)"""
     up_cnt = down_cnt = flat_cnt = 0
     market_snap = {}
     for url, mkt, c_k, n_k, cl_k, chg_k, val_k in [
@@ -780,21 +778,11 @@ def fetch_taiex_market_data():
 
 @st.cache_data(ttl=600)
 def scan_sector_performance(sector_map_json_str, margins_dict):
-    """
-    【v11.0 動態活水族群引擎】
-    1. 掃描全市場 2,100 檔即時報價與官方產業分類：
-       - 若全市場出現「今日帶量上漲 (>2.5% 且成交值前段班)」但不在原本 93 檔內的新飆股，
-         自動依其官方產業分類注入對應的 16 大族群（標示 🔥[動態入榜]）！
-       - 若今日資金湧入原本 16 類以外的官方產業（如生技醫療、化學工業、金融、營建、觀光等），
-         自動將今日最強的動態產業整隊浮現為『🌟 [動態主流] XX業』，100% 每一檔都有清楚的族群歸屬！
-    """
     sec_map = json.loads(sector_map_json_str)
     ind_map = fetch_all_stock_industry_map()
     snap_data = fetch_full_market_snapshot_and_breadth().get("market_snap", {})
-
     existing_codes = {item[0] for s_list in sec_map.values() for item in s_list}
 
-    # 從全市場 2,100 檔找出今日成交值 >= 3 億且漲幅前 45 名的強勢活水股
     hot_candidates = sorted(
         [v for k, v in snap_data.items() if k not in existing_codes and v["trade_val_yi"] >= 3.0 and v["chg_1d_pct"] >= 1.5],
         key=lambda x: (x["chg_1d_pct"] * 0.6 + min(20, x["trade_val_yi"]) * 0.4), reverse=True
@@ -812,10 +800,8 @@ def scan_sector_performance(sector_map_json_str, margins_dict):
             dyn_sec_name = f"🌟 [動態主流] {ind_cat}"
             extra_ind_buckets.setdefault(dyn_sec_name, []).append([c, f"{n}🔥", mkt])
 
-    # 若某個非 16 類的新興產業今日有 >= 2 檔同時爆量轉強，整族自動浮現加入排行榜！
     for dyn_name, dyn_list in extra_ind_buckets.items():
-        if len(dyn_list) >= 2:
-            sec_map[dyn_name] = dyn_list[:6]
+        if len(dyn_list) >= 2: sec_map[dyn_name] = dyn_list[:6]
 
     tasks = [(sec_name, item[0], item[1], item[2]) for sec_name, s_list in sec_map.items() for item in s_list]
     sector_records = {k: [] for k in sec_map.keys()}
@@ -858,8 +844,7 @@ def scan_sector_performance(sector_map_json_str, margins_dict):
 
 @st.cache_data(ttl=1800)
 def fetch_stock_news(code, name):
-    raw_items = []
-    clean_n = name.replace("🔥", "").strip()
+    raw_items, clean_n = [], name.replace("🔥", "").strip()
     bad_w = {"南亞": ["南亞科", "南亞電"], "台塑": ["台塑化"], "長榮": ["長榮航", "長榮鋼"]}.get(clean_n, [])
     for q_s in [f'"{code}" "{clean_n}" when:7d', f'"{clean_n}" 股 when:7d']:
         try:
