@@ -1,4 +1,4 @@
-# 檔案名稱：stock_arsenal_v1.py (v11.0 黃金三分頁 + 機構級個股4維度/大盤5維度動態評分 + 全市場動態族群旗艦版)
+# 檔案名稱：stock_arsenal_v1.py (v11.2 實戰總結版 + 修復AI深色白框 + AH/NH/NL/AL四價位 + 極速精簡架構)
 import os, re, json, requests, importlib
 from datetime import datetime
 import pandas as pd
@@ -11,9 +11,6 @@ importlib.reload(de)
 
 st.set_page_config(page_title="個股衍生武器庫 & 短線當沖戰情室", page_icon="⚡", layout="wide", initial_sidebar_state="collapsed")
 
-# ==========================================
-# 0. 初始化永久記憶狀態與主題色系
-# ==========================================
 DEFAULT_STATES = {
     "font_scale": 1.05, "theme_mode": "dark", "admin_unlocked": False, "active_nav_tab": 1,
     "unlocked_tab1": False, "unlocked_tab2": False, "unlocked_tab4": False,
@@ -23,9 +20,9 @@ DEFAULT_STATES = {
         {"id": "📊", "name": "📊 法人與資券直方柱狀圖 (近20日視覺化)", "show": True},
         {"id": "📋", "name": "📋 五週期籌碼累計矩陣 & 逐日明細表", "show": True},
         {"id": "📰", "name": "📰 近期市場消息與催化劑雷達", "show": True},
-        {"id": "📐", "name": "📐 下個交易日 CDP 當沖支撐壓力區間", "show": True},
+        {"id": "📐", "name": "📐 下個交易日 AH / NH / NL / AL 支撐壓力區間", "show": True},
     ],
-    "ai_chat_history": [{"role": "assistant", "content": "您好！我是戰情室 AI 助手 🤖。您可以直接點選下方快捷按鈕，或輸入任何『股票代號（如 2330、3037、0050）』、『大盤籌碼』或『當沖試算問題』，我會立即調出三週期與機構級評分數據為您解析！"}]
+    "ai_chat_history": [{"role": "assistant", "content": "您好！我是戰情室 AI 助手 🤖。請點選上方快捷按鈕，或輸入任何**股票代號（如 2330、3017、0050）**或**大盤問題**，我會直接幫您統整數據並給出實戰總結論與 AH/NH/NL/AL 關鍵價位！"}]
 }
 for k, v in DEFAULT_STATES.items():
     st.session_state.setdefault(k, v)
@@ -43,22 +40,20 @@ BG_MAIN, BG_SIDEBAR, TEXT_MAIN, TEXT_SUB, TEXT_MUTED, CARD_BG, CARD_BG_ALT, CARD
 scale = st.session_state.font_scale
 card_min_width = "245px" if scale >= 1.15 else "210px"
 
-# ==========================================
-# 1. 全域 CSS (含 AI 助手彈出視窗內外深淺色同步 & 手機 RWD 滿版)
-# ==========================================
 st.markdown(f"""<style>
 .stApp {{ background-color: {BG_MAIN} !important; color: {TEXT_MAIN} !important; }}
 .block-container {{ max-width: 1260px !important; padding: 3.4rem 2rem 5rem 2rem !important; }}
 section[data-testid="stSidebar"] {{ background-color: {BG_SIDEBAR} !important; color: {TEXT_MAIN} !important; }}
 h1, h2, h3, h4, h5, h6, p, label, .stMarkdown, [data-testid="stCaptionContainer"] {{ color: {TEXT_MAIN} !important; }}
-.stButton > button {{ background-color: {CARD_BG} !important; color: {TEXT_MAIN} !important; border: 1px solid {CARD_BORDER} !important; font-weight: bold !important; white-space: normal !important; word-break: break-word !important; line-height: 1.35 !important; padding: 0.45rem 0.7rem !important; min-height: 2.45rem !important; transition: all 0.15s ease-in-out !important; }}
+.stButton > button {{ background-color: {CARD_BG} !important; color: {TEXT_MAIN} !important; border: 1px solid {CARD_BORDER} !important; font-weight: bold !important; white-space: normal !important; word-break: break-word !important; line-height: 1.35 !important; padding: 0.45rem 0.7rem !important; min-height: 2.45rem !important; }}
 .stButton > button:hover {{ border-color: #4A90E2 !important; color: #60A5FA !important; }}
-.stButton > button[kind="primary"] {{ background: linear-gradient(135deg, #1E3A8A 0%, #2563EB 100%) !important; color: #FFFFFF !important; border: 1.5px solid #60A5FA !important; box-shadow: 0 4px 12px rgba(37, 99, 235, 0.35) !important; }}
+.stButton > button[kind="primary"] {{ background: linear-gradient(135deg, #1E3A8A 0%, #2563EB 100%) !important; color: #FFFFFF !important; border: 1.5px solid #60A5FA !important; }}
 div[data-testid="stPopover"] {{ position: fixed !important; bottom: 24px !important; right: 26px !important; z-index: 999999 !important; width: auto !important; }}
 div[data-testid="stPopover"] > div > button, div[data-testid="stPopover"] > button {{ background: linear-gradient(135deg, #00D26A 0%, #009E4F 100%) !important; color: #000000 !important; border-radius: 50px !important; padding: 11px 20px !important; font-size: 15.5px !important; font-weight: 800 !important; border: 2px solid #FFFFFF !important; box-shadow: 0 6px 20px rgba(0, 210, 106, 0.55) !important; white-space: nowrap !important; }}
 div[data-testid="stPopover"] > div > button *, div[data-testid="stPopover"] > button * {{ color: #000000 !important; font-weight: 800 !important; }}
 div[data-baseweb="popover"] > div, div[data-testid="stPopoverBody"] {{ background-color: {CARD_BG} !important; color: {TEXT_MAIN} !important; border: 1.5px solid #4A90E2 !important; border-radius: 14px !important; }}
-div[data-testid="stPopoverBody"] h1, div[data-testid="stPopoverBody"] h2, div[data-testid="stPopoverBody"] h3, div[data-testid="stPopoverBody"] h4, div[data-testid="stPopoverBody"] p, div[data-testid="stPopoverBody"] span, div[data-testid="stPopoverBody"] div[data-testid="stCaptionContainer"], div[data-testid="stPopoverBody"] div[data-testid="stMarkdownContainer"] * {{ color: {TEXT_MAIN} !important; }}
+div[data-testid="stPopoverBody"] h1, div[data-testid="stPopoverBody"] h2, div[data-testid="stPopoverBody"] h3, div[data-testid="stPopoverBody"] h4, div[data-testid="stPopoverBody"] p, div[data-testid="stPopoverBody"] span, div[data-testid="stPopoverBody"] li, div[data-testid="stPopoverBody"] strong, div[data-testid="stPopoverBody"] b, div[data-testid="stPopoverBody"] div[data-testid="stCaptionContainer"] {{ color: {TEXT_MAIN} !important; }}
+div[data-testid="stPopoverBody"] code, .stMarkdown code {{ background-color: rgba(59, 130, 246, 0.18) !important; color: #38BDF8 !important; padding: 2px 6px !important; border-radius: 4px !important; font-weight: bold !important; }}
 div[data-testid="stPopoverBody"] .stButton > button {{ background-color: {BG_MAIN} !important; color: {TEXT_MAIN} !important; border: 1px solid #4A90E2 !important; border-radius: 8px !important; }}
 div[data-testid="stPopoverBody"] .stButton > button * {{ color: {TEXT_MAIN} !important; }}
 div[data-testid="stPopoverBody"] [data-testid="stVerticalBlockBorderWrapper"] {{ background-color: {BG_MAIN} !important; border-color: {CARD_BORDER} !important; }}
@@ -115,7 +110,7 @@ with top_c2:
         btn_c2.button(f"➕放大({int(round(scale*100))}%)", use_container_width=True, on_click=inc_font)
 
 # ==========================================
-# 2. 視覺化圖表引擎 (支援日K / 60分K / 5分K 全套布林、九轉、扣抵與CDP疊加)
+# 2. 視覺化圖表引擎 (支援 AH / NH / NL / AL 四價位疊加)
 # ==========================================
 def style_signed_numbers(val):
     try:
@@ -167,9 +162,8 @@ def plot_universal_kline_chart(kline_records, scale_factor=1.05, show_bb=True, s
         fig.add_hline(y=ded_price, line_width=1.1, line_dash="dash", line_color=star_color, annotation_text=f"扣抵 {ded_price}", annotation_position="bottom left", annotation_font=dict(color=star_color, size=int(9.5 * scale_factor)), row=1, col=1)
 
     if show_cdp and cdp_vals:
-        fig.add_hline(y=cdp_vals["CDP"], line_width=1.3, line_dash="dot", line_color="#38BDF8", annotation_text=f"CDP分水嶺 {cdp_vals['CDP']}", annotation_position="top left", annotation_font=dict(color="#38BDF8", size=int(10 * scale_factor)), row=1, col=1)
-        fig.add_hline(y=cdp_vals["NH"], line_width=1.0, line_dash="dot", line_color="#F87171", annotation_text=f"NH壓力 {cdp_vals['NH']}", annotation_position="top right", annotation_font=dict(color="#F87171", size=int(9.5 * scale_factor)), row=1, col=1)
-        fig.add_hline(y=cdp_vals["NL"], line_width=1.0, line_dash="dot", line_color="#4ADE80", annotation_text=f"NL支撐 {cdp_vals['NL']}", annotation_position="bottom right", annotation_font=dict(color="#4ADE80", size=int(9.5 * scale_factor)), row=1, col=1)
+        for lv_key, lv_lbl, lv_clr, lv_pos in [("AH", "AH極端突破", "#EF4444", "top left"), ("NH", "NH常態壓力", "#F97316", "top right"), ("NL", "NL常態支撐", "#38BDF8", "bottom right"), ("AL", "AL極端破底", "#10B981", "bottom left")]:
+            fig.add_hline(y=cdp_vals[lv_key], line_width=1.1, line_dash="dot", line_color=lv_clr, annotation_text=f"{lv_lbl} {cdp_vals[lv_key]}", annotation_position=lv_pos, annotation_font=dict(color=lv_clr, size=int(9.5 * scale_factor)), row=1, col=1)
 
     if show_volume and "Volume" in df_k.columns:
         bar_colors = ["#FF4B4B" if c >= o else "#00D26A" for c, o in zip(df_k["Close"], df_k["Open"])]
@@ -235,7 +229,7 @@ def check_tab_password_gate(tab_num, tab_key, is_locked, correct_pwd, gate_title
     return False
 
 # ==========================================
-# 3. 分頁 2 專用「手機/電腦雙棲 100% 滿版局部刷新試算室 (@st.fragment)」
+# 3. 分頁 2 專用「獲利價位 & 近五檔損益」試算室 (@st.fragment)
 # ==========================================
 @st.fragment
 def render_fast_profit_calculator(line_url, is_public_promo=False):
@@ -265,8 +259,7 @@ def render_fast_profit_calculator(line_url, is_public_promo=False):
             st.markdown(f"""<div class="pillar-card" style="border-left: 5px solid {pnl_color}; margin-top: 6px;">
             <div class="pillar-title"><span>📊 買 {buy_p_in:g} 元 ➔ 賣 {sell_p_in:g} 元 ({lots_in} 張)</span><span class="{'tag-bull' if main_res['net_pnl']>0 else 'tag-bear'}">報酬率 {main_res['roi_pct']:+.2f}%</span></div>
             <div style="background:{SCORE_BOX_BG}; padding:10px 12px; border-radius:8px; margin-bottom:10px; font-size:{round(13.5*scale,1)}px; line-height:1.65;">
-            • <b>手續費明細：</b>買 {main_res['fee_buy']:,} ＋ 賣 {main_res['fee_sell']:,} ＝ <b>{main_res['total_fee']:,} 元</b><br>
-            • <b>交易稅與總成本：</b>稅 {main_res['tax']:,} 元 ｜ 總成本 <b>{main_res['total_cost']:,} 元</b></div>
+            • <b>手續費明細：</b>買 {main_res['fee_buy']:,} ＋ 賣 {main_res['fee_sell']:,} ＝ <b>{main_res['total_fee']:,} 元</b> ｜ <b>稅與總成本：</b>稅 {main_res['tax']:,} ／ 總成本 <b>{main_res['total_cost']:,} 元</b></div>
             <div style="font-size:{round(14.5*scale,1)}px; line-height:1.75;">
             - 📈 <b>做多獲利價：</b><span style="color:#F59E0B; font-weight:bold; font-size:{round(16*scale,1)}px;">{main_res['long_be_price']:.2f} 元</span> <span style="font-size:12.5px; color:#00D26A; font-weight:bold;">(⚡+{main_res['long_win_ticks']}檔至 {main_res['long_win_price']:g} 元即賺)</span><br>
             - 📉 <b>放空獲利價：</b><span style="color:#3498DB; font-weight:bold; font-size:{round(16*scale,1)}px;">{main_res['short_be_price']:.2f} 元</span> <span style="font-size:12.5px; color:#3498DB; font-weight:bold;">(⚡-{main_res['short_win_ticks']}檔至 {main_res['short_win_price']:g} 元即賺)</span><br>
@@ -307,18 +300,17 @@ def render_fast_profit_calculator(line_url, is_public_promo=False):
             for tab_obj, is_long in [(tab_long_5, True), (tab_short_5, False)]:
                 with tab_obj:
                     if is_long:
-                        st.caption(f"⚡ 買進 `{buy_p_in:g}元` 往上 **+{main_res['long_win_ticks']} 檔 ({main_res['long_win_price']:g}元)** 即開始獲利！")
+                        st.caption(f"⚡ 買進 **{buy_p_in:g}元** 往上 **+{main_res['long_win_ticks']} 檔 ({main_res['long_win_price']:g}元)** 即開始獲利！")
                         steps, p_col = [5, 4, 3, 2, 1, 0, -1, -2, -3], "賣價"
                     else:
-                        st.caption(f"⚡ 先賣 `{sell_p_in:g}元` 往下 **-{main_res['short_win_ticks']} 檔 ({main_res['short_win_price']:g}元)** 回補即開始獲利！")
+                        st.caption(f"⚡ 先賣 **{sell_p_in:g}元** 往下 **-{main_res['short_win_ticks']} 檔 ({main_res['short_win_price']:g}元)** 回補即開始獲利！")
                         steps, p_col = [-5, -4, -3, -2, -1, 0, 1, 2, 3], "補價"
 
                     rows_5 = []
                     for s_i in steps:
                         t_p = de.step_tw_ticks(buy_p_in if is_long else sell_p_in, s_i)
                         r_c = de.calc_trade_row_min20(buy_p_in if is_long else t_p, t_p if is_long else sell_p_in, lots_in, excel_fold, excel_tax_rate)
-                        if is_long: lbl = f"🔥+{s_i}檔" if s_i > 0 else ("⚪平盤" if s_i == 0 else f"❄️{s_i}檔")
-                        else: lbl = f"🔥{s_i}檔" if s_i < 0 else ("⚪平盤" if s_i == 0 else f"❄️+{s_i}檔")
+                        lbl = (f"🔥+{s_i}檔" if s_i > 0 else ("⚪平盤" if s_i == 0 else f"❄️{s_i}檔")) if is_long else (f"🔥{s_i}檔" if s_i < 0 else ("⚪平盤" if s_i == 0 else f"❄️+{s_i}檔"))
                         rows_5.append({"檔位": lbl, p_col: t_p, "實拿損益": r_c["net_pnl"], "報酬率": r_c["roi_pct"], "總成本(稅+費)": r_c["total_cost"]})
 
                     st.dataframe(pd.DataFrame(rows_5).style.map(style_signed_numbers, subset=["實拿損益", "報酬率"]).format({p_col: "{:g}", "實拿損益": "{:+,.0f}", "報酬率": "{:+.2f}%", "總成本(稅+費)": "{:,.0f}"}), use_container_width=True, hide_index=True, height=365)
@@ -363,7 +355,7 @@ with st.sidebar:
         if col_adm2.button("登出", use_container_width=True): st.session_state.admin_unlocked = False; st.rerun()
 
         st.subheader("🔐 獨立密碼鎖 & LINE / API 設定")
-        new_line_url = st.text_input("💬 營業員 LINE 連結 (按Enter即自動存檔)：", value=cfg["broker_line_url"]).strip()
+        new_line_url = st.text_input("💬 營業員 LINE 連結 (按Enter自動存檔)：", value=cfg["broker_line_url"]).strip()
         if new_line_url and not new_line_url.startswith("http"): new_line_url = "https://" + new_line_url
         new_promo_mode = st.checkbox("🌐 切換為「對外開發公版模式（顯示手續費優惠）」", value=bool(cfg.get("public_promo_mode", False)))
         new_gemini_key = st.text_input("🤖 Gemini API Key (選填)：", type="password", value=str(cfg.get("gemini_api_key", ""))).strip()
@@ -376,29 +368,6 @@ with st.sidebar:
         new_vals = {"lock_tab1": bool(l_t1), "pwd_tab1": p_t1, "lock_tab2": bool(l_t2), "pwd_tab2": p_t2, "lock_tab4": bool(l_t4), "pwd_tab4": p_t4, "public_promo_mode": bool(new_promo_mode), "gemini_api_key": new_gemini_key, "finmind_token": new_fm_token, "broker_line_url": new_line_url or cfg["broker_line_url"]}
         if any(cfg.get(k) != v for k, v in new_vals.items()):
             cfg.update(new_vals); de.save_config(cfg); st.toast("✅ 設定已自動儲存！")
-
-        st.divider(); st.subheader("🗂️ 自訂熱門族群管理 (支援截圖辨識)")
-        custom_sec_name = st.text_input("1️⃣ 輸入要新增/擴充的族群名稱：", placeholder="例如：17. 機器人與智慧製造")
-        img_up = st.file_uploader("📸 (選填) 上傳看盤截圖自動辨識代號：", type=["png", "jpg", "jpeg"])
-        if img_up and st.button("🔍 點此從截圖 AI 辨識股票代號", use_container_width=True):
-            if not cfg.get("gemini_api_key"): st.warning("⚠️ 請先填入 Gemini API Key！")
-            else:
-                with st.spinner("🤖 正在辨識台股代號..."):
-                    ext_txt = de.extract_stocks_from_image_via_gemini(img_up.getvalue(), img_up.type, cfg["gemini_api_key"])
-                    if ext_txt: st.session_state.ocr_extracted_codes = ext_txt; st.success(f"✅ 辨識成功：{ext_txt}"); st.rerun()
-
-        custom_codes_raw = st.text_area("2️⃣ 輸入成分股代號或名稱：", value=st.session_state.get("ocr_extracted_codes", ""), placeholder="例如：2359, 2049, 4576")
-        if st.button("➕ 儲存並加入此族群", use_container_width=True, type="primary") and custom_sec_name.strip() and custom_codes_raw.strip():
-            parsed_stocks = []
-            for tk in [t.strip() for t in re.split(r"[,\s、，；;]+", custom_codes_raw) if t.strip()]:
-                if tk in code_to_name_map: parsed_stocks.append([tk, code_to_name_map[tk], code_to_mkt_map.get(tk, "TWSE")])
-                elif tk in name_to_code_map: parsed_stocks.append([name_to_code_map[tk], tk, code_to_mkt_map.get(name_to_code_map[tk], "TWSE")])
-                elif re.match(r"^\d{4}$", tk): parsed_stocks.append([tk, tk, "TWSE"])
-            if parsed_stocks:
-                sector_map_all[custom_sec_name.strip()] = parsed_stocks; de.save_sector_map(sector_map_all); st.cache_data.clear(); st.success(f"🎉 已寫入【{custom_sec_name}】！"); st.rerun()
-
-        if os.path.exists(de.CUSTOM_SECTORS_FILE) and st.button("🔄 還原預設 16 大族群", use_container_width=True):
-            os.remove(de.CUSTOM_SECTORS_FILE); st.cache_data.clear(); st.rerun()
 
         st.divider(); st.subheader("🚀 官方名冊與大盤籌碼同步")
         if st.button("📈 1. 更新上市櫃 2,100+ 檔股票與 ETF 名冊", use_container_width=True):
@@ -413,23 +382,6 @@ with st.sidebar:
             with st.spinner("正在連線證交所與期交所抓取最新數據..."):
                 mkt_res = de.sync_market_institutional_online(str(cfg.get("finmind_token", "")).strip())
                 if mkt_res: cfg.update(mkt_res); de.save_config(cfg); st.success("✅ 同步完成！"); st.rerun()
-
-        st.divider(); st.subheader("🚦 大盤籌碼手動微調校準")
-        with st.form("manual_mkt_calibrate_form"):
-            new_foi = st.number_input("外資台指期未平倉淨額(口)", value=int(cfg["mkt_foreign_oi"]), step=500)
-            new_foi_chg = st.number_input("外資期貨未平倉單日增減(口)", value=int(cfg.get("mkt_foreign_oi_chg", -1420)), step=100)
-            new_sp_f = st.number_input("外資上市現貨買賣超(億)", value=float(cfg.get("mkt_spot_foreign", 159.22)), step=10.0)
-            new_sp_t = st.number_input("投信上市現貨買賣超(億)", value=float(cfg.get("mkt_spot_trust", 118.07)), step=5.0)
-            new_sp_d = st.number_input("自營商上市現貨買賣超(億)", value=float(cfg.get("mkt_spot_dealer", 21.65)), step=5.0)
-            new_mbal = st.number_input("大盤融資餘額(億元)", value=float(cfg.get("mkt_margin_bal", 6233.87)), step=10.0)
-            new_mchg = st.number_input("大盤融資單日增減(億元)", value=float(cfg.get("mkt_margin_chg", -104.93)), step=2.0)
-            new_mchg3 = st.number_input("大盤融資近3日累計增減(億元)", value=float(cfg.get("mkt_margin_chg_3d", -147.13)), step=5.0)
-            new_sbal = st.number_input("大盤融券餘額(張)", value=int(cfg.get("mkt_short_bal", 217708)), step=1000)
-            new_schg = st.number_input("大盤融券單日增減(張)", value=int(cfg.get("mkt_short_chg", 1169)), step=500)
-            new_cnn_fg = st.number_input("CNN 恐懼貪婪備用值 (0~100)", min_value=0, max_value=100, value=int(cfg.get("cnn_fear_greed", 34)), step=1)
-            if st.form_submit_button("💾 儲存手動微調數據", use_container_width=True):
-                cfg.update({"mkt_foreign_oi": int(new_foi), "mkt_foreign_oi_chg": int(new_foi_chg), "mkt_spot_foreign": float(new_sp_f), "mkt_spot_trust": float(new_sp_t), "mkt_spot_dealer": float(new_sp_d), "mkt_margin_bal": float(new_mbal), "mkt_margin_chg": float(new_mchg), "mkt_margin_chg_3d": float(new_mchg3), "mkt_short_bal": int(new_sbal), "mkt_short_chg": int(new_schg), "cnn_fear_greed": int(new_cnn_fg)})
-                de.save_config(cfg); st.success("✅ 已儲存！"); st.rerun()
 
 is_public_promo, fm_token_str = bool(cfg.get("public_promo_mode", False)), str(cfg.get("finmind_token", "")).strip()
 
@@ -464,7 +416,7 @@ def jump_to_tab1_with_stock(code_str):
         del st.session_state["tab1_stock_sel_widget"]
 
 # ------------------------------------------------------------------
-# 【分頁 1：🔍 個股三週期共振雷達 (4維度機構級評分 + 日K/60分K/5分K)】
+# 【分頁 1：🔍 個股三週期共振雷達 (含實戰綜合總結論 & AH/NH/NL/AL 四價位)】
 # ------------------------------------------------------------------
 if cur_tab == 1:
     if check_tab_password_gate(1, "unlocked_tab1", cfg.get("lock_tab1", False), cfg.get("pwd_tab1", "VIP888"), "個股三週期技術與籌碼雷達", "輸入本季基礎 VIP 通行碼即可解鎖「日K/60分K/5分K三週期共振雷達與機構級評分」。", cfg["broker_line_url"]):
@@ -523,14 +475,15 @@ if cur_tab == 1:
             st.button("🔄 恢復預設順序與全部顯示", use_container_width=True, on_click=_reset_mod)
 
         eval_res = de.evaluate_three_pillars(tech, chip, BULL_COLOR, BEAR_COLOR, WARN_COLOR, tech_60m=tech_60m, tech_5m=tech_5m, margin_info=margin_info, fund_info=fund_info, taiex_info=taiex_quick)
-        st.subheader(f"📊 【{selected_code} {stock_name}】機構級四維度共振體檢")
+        st.subheader(f"📊 【{selected_code} {stock_name}】機構級四維度共振體檢 & 實戰總結論")
         st.markdown(f"<p style='font-size:{round(14*scale, 1)}px; color:{TEXT_MUTED}; margin-top:-10px;'>📅 <b>最新有效交易日：{trade_date}</b> ｜ 最新價格：<b>{close_price} 元</b>（單日 <b>{tech['chg_1d_pct']:+.2f}%</b> ／ 對抗大盤 Alpha <b>{eval_res['alpha_1d']:+.2f}%</b>） ｜ 市場：<b>{'上市' if market_hint=='TWSE' else '上櫃'}</b></p>", unsafe_allow_html=True)
 
-        st.markdown(f"""<div class="score-banner"><div style="flex: 1; min-width: 220px;">
-        <div style="font-size: {round(13.5 * scale, 1)}px; color: {TEXT_MUTED}; margin-bottom: 4px;">🎯 系統機構級客觀共振診斷（綜合 Alpha、三週期分K、投本比/外本比與營收加速度）</div>
-        <div style="font-size: {round(19 * scale, 1)}px; font-weight: bold; color: {eval_res['v_color']}; margin-bottom: 6px;">{eval_res['verdict']}</div>
-        <div style="font-size: {round(14 * scale, 1)}px; color: {TEXT_SUB}; line-height: 1.55;">{eval_res['v_desc']}</div></div>
-        <div style="text-align: center; padding: 10px 18px; background: {SCORE_BOX_BG}; border-radius: 10px; border: 1px solid {CARD_BORDER};">
+        desc_html = eval_res["v_desc"].replace("\n", "<br>")
+        st.markdown(f"""<div class="score-banner"><div style="flex: 1; min-width: 240px;">
+        <div style="font-size: {round(13.5 * scale, 1)}px; color: {TEXT_MUTED}; margin-bottom: 4px;">🎯 系統機構級實戰總結論（綜合 Alpha、三週期分K、投本比/外本比與 AH/NH/NL/AL 價位）</div>
+        <div style="font-size: {round(19 * scale, 1)}px; font-weight: bold; color: {eval_res['v_color']}; margin-bottom: 8px;">{eval_res['verdict']}</div>
+        <div style="font-size: {round(14.2 * scale, 1)}px; color: {TEXT_MAIN}; line-height: 1.7; background: {SCORE_BOX_BG}; padding: 10px 14px; border-radius: 8px; border-left: 4px solid {eval_res['v_color']};">{desc_html}</div></div>
+        <div style="text-align: center; padding: 12px 18px; background: {SCORE_BOX_BG}; border-radius: 10px; border: 1px solid {CARD_BORDER};">
         <div style="font-size: {round(12.5 * scale, 1)}px; color: {TEXT_MUTED};">機構量化總分</div>
         <div style="font-size: {round(32 * scale, 1)}px; font-weight: bold; color: {eval_res['v_color']};">{eval_res['total']}<span style="font-size:{round(14 * scale, 1)}px; color:{TEXT_SUB};"> / 100</span></div></div></div>""", unsafe_allow_html=True)
 
@@ -572,12 +525,12 @@ if cur_tab == 1:
                 chk_c1, chk_c2, chk_c3 = st.columns(3)
                 show_bb_s = chk_c1.checkbox("🟣 顯示布林通道 (±2σ)", value=True, key="s_bb_chk")
                 show_td_s = chk_c2.checkbox("🔢 顯示神奇九轉 (TD9)", value=True, key="s_td_chk")
-                show_cdp_s = chk_c3.checkbox("📐 疊加 CDP 支撐壓力線", value=True, key="s_cdp_chk")
+                show_cdp_s = chk_c3.checkbox("📐 疊加 AH / NH / NL / AL 支撐壓力線", value=True, key="s_cdp_chk")
 
                 k_tab_daily, k_tab_60m, k_tab_5m = st.tabs([
                     "📅 1. 日 K 實戰圖 (近60日 + 扣抵⭐ + 布林 + 九轉)",
-                    "⏱️ 2. 60 分 K 波段轉折圖 (小時線 + 布林 + 九轉 + 扣抵⭐ + CDP)",
-                    "⚡ 3. 5 分 K 當沖狙擊圖 (五分線 + 布林 + 九轉 + 扣抵⭐ + CDP)"
+                    "⏱️ 2. 60 分 K 波段轉折圖 (小時線 + 布林 + 九轉 + 扣抵⭐ + 四價位)",
+                    "⚡ 3. 5 分 K 當沖狙擊圖 (五分線 + 布林 + 九轉 + 扣抵⭐ + 四價位)"
                 ])
                 with k_tab_daily:
                     st.plotly_chart(plot_universal_kline_chart(tech["kline_60"], scale, show_bb=show_bb_s, show_td=show_td_s, show_cdp=show_cdp_s, cdp_vals=cdp_vals, show_volume=False), use_container_width=True, theme=None)
@@ -627,11 +580,11 @@ if cur_tab == 1:
                     else: st.caption("近期無重大個股新聞。")
 
             elif sec_item == "📐":
-                st.subheader("📐 下個交易日 CDP 當沖支撐壓力區間參考")
-                levels = [("AL 極端破底", cdp_vals["AL"], "#2ECC71"), ("NL 常態支撐", cdp_vals["NL"], "#3498DB"), ("CDP 分水嶺", cdp_vals["CDP"], "#F59E0B"), ("NH 常態壓力", cdp_vals["NH"], "#E67E22"), ("AH 極端突破", cdp_vals["AH"], "#E74C3C")]
+                st.subheader("📐 下個交易日 AH / NH / NL / AL 當沖支撐壓力四價位")
+                levels = [("AL 極端破底支撐", cdp_vals["AL"], "#2ECC71"), ("NL 常態回檔支撐", cdp_vals["NL"], "#3498DB"), ("NH 常態反彈壓力", cdp_vals["NH"], "#E67E22"), ("AH 極端突破壓力", cdp_vals["AH"], "#E74C3C")]
                 fig_cdp = go.Figure(go.Bar(y=[x[0] for x in levels], x=[x[1] for x in levels], orientation='h', text=[f"{x[1]} 元" for x in levels], textposition='outside', textfont=dict(size=int(12 * scale), color=TEXT_MAIN), marker_color=[x[2] for x in levels]))
                 fig_cdp.add_vline(x=close_price, line_width=2, line_dash="dash", line_color=TEXT_MAIN)
-                fig_cdp.update_layout(xaxis=dict(range=[min(cdp_vals["AL"], close_price) * 0.95, max(cdp_vals["AH"], close_price) * 1.08], tickfont=dict(size=int(11 * scale), color=TEXT_MAIN), gridcolor=GRID_COLOR, automargin=True), yaxis=dict(tickfont=dict(size=int(12 * scale), color=TEXT_MAIN), automargin=True), height=int(300 * max(1.0, scale * 0.95)), margin=dict(l=10, r=40, t=30, b=10), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor=PLOT_BG, font=dict(color=TEXT_MAIN))
+                fig_cdp.update_layout(xaxis=dict(range=[min(cdp_vals["AL"], close_price) * 0.95, max(cdp_vals["AH"], close_price) * 1.08], tickfont=dict(size=int(11 * scale), color=TEXT_MAIN), gridcolor=GRID_COLOR, automargin=True), yaxis=dict(tickfont=dict(size=int(12 * scale), color=TEXT_MAIN), automargin=True), height=int(270 * max(1.0, scale * 0.95)), margin=dict(l=10, r=40, t=25, b=10), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor=PLOT_BG, font=dict(color=TEXT_MAIN))
                 st.plotly_chart(fig_cdp, use_container_width=True, theme=None)
 
         render_cta_box(
@@ -653,7 +606,7 @@ elif cur_tab == 2:
 elif cur_tab == 3:
     if check_tab_password_gate(3, "unlocked_tab4", cfg.get("lock_tab4", False), cfg.get("pwd_tab4", "VIP888"), "大盤期現貨風向與主流族群雷達", "輸入本季基礎 VIP 通行碼即可解鎖「大盤資金風向球」與「全市場動態主流族群」。", cfg["broker_line_url"]):
         tb4_c1, tb4_c2 = st.columns([7.5, 2.5])
-        tb4_c1.subheader("🚦 台股大盤資金風向球 & 期現貨/匯率/費半監控")
+        tb4_c1.subheader("🚦 台股大盤資金風向球 & 實戰總結論")
         if tb4_c2.button("🔄 重新掃描族群與大盤", use_container_width=True):
             de.fetch_taiex_market_data.clear()
             de.auto_sync_market_chips_cached.clear()
@@ -680,17 +633,15 @@ elif cur_tab == 3:
             mkt_eval = de.evaluate_taiex_market_score(taiex, cfg, breadth_fg, taiex.get("macro"), BULL_COLOR, BEAR_COLOR, WARN_COLOR)
             mkt_total, m_light, m_color, m_cta_title, m_cta_btn = mkt_eval["total"], mkt_eval["light"], mkt_eval["color"], mkt_eval["cta_title"], mkt_eval["cta_btn"]
             macro = mkt_eval["macro"]
+            mkt_summary_html = mkt_eval["summary_action"].replace("\n", "<br>")
 
             st.markdown(f"<p style='font-size:{round(14*scale, 1)}px; color:{TEXT_MUTED};'>📅 <b>最新有效交易日：{taiex['date']}</b> ｜ 加權指數：<b>{t_close:,} 點</b>（漲跌 <b>{taiex['chg']:+} 點</b>） ｜ 💵 新台幣匯率：<b>{macro['fx_rate']}</b>（近5日 {macro['fx_chg_5d']:+.2f}） ｜ 🌎 費半：<b>{macro['sox_chg_1d_pct']:+.2f}%</b>（20日相關係數 <b>r={macro['sox_corr_20d']}</b>）</p>", unsafe_allow_html=True)
 
-            st.markdown(f"""<div class="score-banner"><div style="flex: 1; min-width: 220px;">
-            <div style="font-size: {round(13.5 * scale, 1)}px; color: {TEXT_MUTED}; margin-bottom: 4px;">🚦 今日台股大盤多空風向燈號（5大維度 100分制動態連續評分）</div>
+            st.markdown(f"""<div class="score-banner"><div style="flex: 1; min-width: 240px;">
+            <div style="font-size: {round(13.5 * scale, 1)}px; color: {TEXT_MUTED}; margin-bottom: 4px;">🚦 今日台股大盤多空風向燈號 & 實戰總結論</div>
             <div style="font-size: {round(19 * scale, 1)}px; font-weight: bold; color: {m_color}; margin-bottom: 8px;">{m_light}</div>
-            <div style="font-size: {round(14 * scale, 1)}px; color: {TEXT_SUB}; line-height: 1.6;">
-            1. <b>大盤趨勢與扣抵：</b>指數位於月線（{t_ma20:,}點）{'之上' if t_close >= t_ma20 else '之下'}（月線乖離率 <b>{taiex['bias20']:+.2f}%</b>），20日前扣抵在 <b>{t_deduct:,} 點</b>（{'低檔助漲保護' if t_close >= t_deduct else '高檔反壓警戒'}）。<br>
-            2. <b>匯率活水與費半連動：</b>新台幣匯率 <b>{macro['fx_rate']}</b>（{'升值資金流入' if macro['fx_chg_5d']<=0 else '貶值資金外流'}）｜ 費城半導體 <b>{macro['sox_chg_1d_pct']:+.2f}%</b>（與台股20日相關係數 <b>{macro['sox_corr_20d']}</b>）。<br>
-            3. <b>三大法人現貨與資券：</b>當日合計 <b>{sp_tot:+} 億元</b>（外資 {sp_f:+} 億、投信 {sp_t:+} 億）｜ 融資 <b>{m_bal:,} 億</b>（單日 <b>{m_chg:+} 億</b> ／ 3日 <b>{m_chg3:+} 億</b>）。</div></div>
-            <div style="text-align: center; padding: 10px 18px; background: {SCORE_BOX_BG}; border-radius: 10px; border: 1px solid {CARD_BORDER};">
+            <div style="font-size: {round(14.2 * scale, 1)}px; color: {TEXT_MAIN}; line-height: 1.7; background: {SCORE_BOX_BG}; padding: 10px 14px; border-radius: 8px; border-left: 4px solid {m_color}; margin-bottom: 8px;">{mkt_summary_html}</div></div>
+            <div style="text-align: center; padding: 12px 18px; background: {SCORE_BOX_BG}; border-radius: 10px; border: 1px solid {CARD_BORDER};">
             <div style="font-size: {round(12.5 * scale, 1)}px; color: {TEXT_MUTED};">大盤動態風向分</div>
             <div style="font-size: {round(32 * scale, 1)}px; font-weight: bold; color: {m_color};">{mkt_total}<span style="font-size:{round(14 * scale, 1)}px; color:{TEXT_SUB};"> / 100</span></div></div></div>""", unsafe_allow_html=True)
 
@@ -721,11 +672,12 @@ elif cur_tab == 3:
             m_chk1, m_chk2, m_chk3 = st.columns(3)
             show_mkt_bb = m_chk1.checkbox("🟣 顯示大盤布林通道", value=True, key="mkt_bb_chk")
             show_mkt_td = m_chk2.checkbox("🔢 顯示大盤神奇九轉 (TD9)", value=True, key="mkt_td_chk")
-            show_mkt_cdp = m_chk3.checkbox("📐 疊加明日大盤 CDP 線", value=True, key="mkt_cdp_chk")
+            show_mkt_cdp = m_chk3.checkbox("📐 疊加明日大盤 AH/NH/NL/AL 四價位線", value=True, key="mkt_cdp_chk")
             st.plotly_chart(plot_universal_kline_chart(taiex["kline_60"], scale, show_bb=show_mkt_bb, show_td=show_mkt_td, show_cdp=show_mkt_cdp, cdp_vals=mkt_cdp, show_volume=False), use_container_width=True, theme=None)
 
-            st.markdown(f"""<div class="metric-card" style="margin-top:8px;"><h4>📐 下個交易日【加權指數 CDP 關鍵點位】統計參考</h4>
-            - <b>AH 極端突破點：</b>{mkt_cdp['AH']:,} 點 ｜ <b>NH 常態壓力點：</b>{mkt_cdp['NH']:,} 點 ｜ <b>CDP 多空分水嶺：</b><b>{mkt_cdp['CDP']:,} 點</b> ｜ <b>NL 常態支撐點：</b>{mkt_cdp['NL']:,} 點 ｜ <b>AL 極端破底點：</b>{mkt_cdp['AL']:,} 點</div>""", unsafe_allow_html=True)
+            st.markdown(f"""<div class="metric-card" style="margin-top:8px;"><h4>📐 下個交易日【加權指數 AH / NH / NL / AL 關鍵四價位】</h4>
+            - 🔥 <b>壓力區間：</b>常態反彈壓力 <b>NH {mkt_cdp['NH']:,} 點</b> ｜ 極端突破壓力 <b>AH {mkt_cdp['AH']:,} 點</b><br>
+            - 🛡️ <b>支撐區間：</b>常態回檔支撐 <b>NL {mkt_cdp['NL']:,} 點</b> ｜ 極端破底支撐 <b>AL {mkt_cdp['AL']:,} 點</b></div>""", unsafe_allow_html=True)
 
             with st.spinner("🔥 正在掃描全市場 2,100 檔動態活水並更新主流族群強弱排行..."):
                 sector_rank = de.scan_sector_performance(json.dumps(sector_map_all, ensure_ascii=False), margins_global_map)
@@ -755,19 +707,19 @@ elif cur_tab == 3:
             render_cta_box(m_cta_title, m_cta_btn, cfg["broker_line_url"])
 
 # ==========================================
-# 6. 右下角懸浮「🤖 AI 戰情助手」Popover 視窗
+# 6. 右下角懸浮「🤖 AI 戰情助手」Popover (無白框清晰版 + 實戰總結論 + AH/NH/NL/AL四價位)
 # ==========================================
 @st.fragment
 def render_floating_ai_assistant(active_code, active_name, cfg_obj, quotes_df):
     with st.popover("🤖 AI 戰情助手"):
         st.markdown("#### 🤖 隨身 AI 短線戰情助手")
-        st.caption(f"目前鎖定標的：**{active_code} {active_name}**（可輸入任何 4 碼股票或 ETF 代號提問！）")
+        st.caption(f"目前鎖定：**{active_code} {active_name}**（可直接輸入任何 4 碼股票或 ETF 代號提問）")
         q_col1, q_col2 = st.columns(2)
         quick_q = None
-        if q_col1.button(f"📊 診斷 {active_code} {active_name}", use_container_width=True): quick_q = f"請幫我診斷 {active_code} {active_name} 的機構級4維度評分、三週期共振與明日 CDP 點位"
-        if q_col2.button("🛡️ 大盤匯率費半與轉折", use_container_width=True): quick_q = "請告訴我今日大盤5維度評分、匯率費半連動與轉折訊號"
+        if q_col1.button(f"📊 診斷 {active_code} {active_name}", use_container_width=True): quick_q = f"請幫我診斷 {active_code} {active_name} 的機構4維度評分、三週期共振、實戰總結論與明日 AH/NH/NL/AL 四價位"
+        if q_col2.button("🛡️ 大盤匯率費半與總結", use_container_width=True): quick_q = "請告訴我今日大盤5維度評分、匯率費半連動與實戰操作總結論"
 
-        with st.container(height=280, border=True):
+        with st.container(height=300, border=True):
             for msg in st.session_state.ai_chat_history[-8:]:
                 with st.chat_message(msg["role"]): st.markdown(msg["content"])
 
@@ -786,8 +738,16 @@ def render_floating_ai_assistant(active_code, active_name, cfg_obj, quotes_df):
                 tx, bfg = de.fetch_taiex_market_data(), de.fetch_full_market_snapshot_and_breadth(cfg_obj.get("cnn_fear_greed", 34))
                 if tx["ok"]:
                     m_ev = de.evaluate_taiex_market_score(tx, cfg_obj, bfg, tx.get("macro"), BULL_COLOR, BEAR_COLOR, WARN_COLOR)
-                    mc = m_ev["macro"]
-                    reply_txt = f"🛡️ **【台股大盤 5 維度動態快篩（{tx['date']}｜總分 {m_ev['total']}/100）】**\n- **燈號診斷**：**{m_ev['light']}**\n- **加權指數**：`{tx['close']:,} 點`（單日 `{tx['chg']:+}` 點，月線乖離 `{tx['bias20']:+.2f}%`）\n- **匯率與費半**：台幣 `{mc['fx_rate']}`（5日 `{mc['fx_chg_5d']:+.2f}`）｜費半 `{mc['sox_chg_1d_pct']:+.2f}%`（20日相關係數 `r={mc['sox_corr_20d']}`）\n- **市場廣度**：上市櫃上漲 `{bfg['up_cnt']}家` / 下跌 `{bfg['down_cnt']}家`（上漲比 `{bfg['up_ratio']}%`）"
+                    mc, m_cdp = m_ev["macro"], de.calculate_cdp(tx["high"], tx["low"], tx["close"])
+                    reply_txt = (
+                        f"🛡️ **【台股大盤 5 維度實戰快篩（{tx['date']}｜總分 {m_ev['total']}/100）】**\n"
+                        f"- **燈號診斷**：**{m_ev['light']}**\n"
+                        f"- **加權指數**：**{tx['close']:,} 點**（單日 **{tx['chg']:+} 點**，月線乖離 **{tx['bias20']:+.2f}%**）\n"
+                        f"- **匯率與費半**：台幣 **{mc['fx_rate']}**（5日 **{mc['fx_chg_5d']:+.2f}**）｜費半 **{mc['sox_chg_1d_pct']:+.2f}%**（20日相關係數 **r={mc['sox_corr_20d']}**）\n"
+                        f"- **市場廣度**：上市櫃上漲 **{bfg['up_cnt']} 家** / 下跌 **{bfg['down_cnt']} 家**（上漲比 **{bfg['up_ratio']}%**）\n"
+                        f"- **明日大盤四價位**：壓力 **NH {m_cdp['NH']:,} ／ AH {m_cdp['AH']:,}** ｜ 支撐 **NL {m_cdp['NL']:,} ／ AL {m_cdp['AL']:,}**\n\n"
+                        f"{m_ev['summary_action']}"
+                    )
                 else: reply_txt = "目前暫時無法取得大盤資料，請稍後再試。"
             else:
                 t_d = de.fetch_technical_indicators(target_c, code_to_mkt_map.get(target_c, "TWSE"))
@@ -801,8 +761,18 @@ def render_floating_ai_assistant(active_code, active_name, cfg_obj, quotes_df):
                     ev = de.evaluate_three_pillars(t_d, c_d, BULL_COLOR, BEAR_COLOR, WARN_COLOR, tech_60m=t_60, tech_5m=t_5, margin_info=m_d, fund_info=f_d, taiex_info=tx_q)
                     cdp_v, p_c = de.calculate_cdp(t_d["high"], t_d["low"], t_d["close"]), c_d["periods"]
                     mtf_r = de.evaluate_mtf_resonance(t_d, t_60, t_5, cdp_v, BULL_COLOR, BEAR_COLOR, WARN_COLOR)
-                    rev_str = f"{f_d['rev_month']}營收YoY `{f_d['yoy_latest']:+.1f}%` (加速度 `{f_d['yoy_accel']:+.1f}%`)" if f_d.get("has_rev") else "ETF/無月營收"
-                    reply_txt = f"🔍 **【{target_c} {target_n} 機構四維度快篩（現價 {t_d['close']} 元）】**\n- **機構總分**：**{ev['total']} / 100 分**（單日Alpha `{ev['alpha_1d']:+.2f}%` ｜ 5日法人控盤度 `{ev['inst_vol_ratio']:+.1f}%`）\n- **三週期共振**：**{mtf_r['title']}**\n- **基本面動能**：{rev_str}\n- **三大法人合計**：1日 `{p_c[1]['tot']:+,}張` ｜ 3日 `{p_c[3]['tot']:+,}張` ｜ 5日 `{p_c[5]['tot']:+,}張`\n- **明日 CDP 點位**：壓力 `NH {cdp_v['NH']}` ／ 分水嶺 **`CDP {cdp_v['CDP']}`** ／ 支撐 `NL {cdp_v['NL']}`"
+                    rev_str = f"{f_d['rev_month']} 營收 YoY **{f_d['yoy_latest']:+.1f}%** (加速度 **{f_d['yoy_accel']:+.1f}%**)" if f_d.get("has_rev") else "ETF/無月營收"
+                    reply_txt = (
+                        f"🔍 **【{target_c} {target_n} 機構四維度快篩（現價 {t_d['close']} 元）】**\n"
+                        f"- **機構總分**：**{ev['total']} / 100 分**（單日Alpha **{ev['alpha_1d']:+.2f}%** ｜ 5日法人控盤度 **{ev['inst_vol_ratio']:+.1f}%**）\n"
+                        f"- **三週期共振**：**{mtf_r['title']}**\n"
+                        f"- **基本面動能**：{rev_str}\n"
+                        f"- **三大法人合計**：1日 **{p_c[1]['tot']:+,}張** ｜ 3日 **{p_c[3]['tot']:+,}張** ｜ 5日 **{p_c[5]['tot']:+,}張**\n"
+                        f"- **明日當沖四價位**：\n"
+                        f"  • 🔥 壓力：**NH {cdp_v['NH']} 元** ／ **AH {cdp_v['AH']} 元**\n"
+                        f"  • 🛡️ 支撐：**NL {cdp_v['NL']} 元** ／ **AL {cdp_v['AL']} 元**\n\n"
+                        f"{ev['v_desc']}"
+                    )
                 else: reply_txt = f"查無 {target_c} 的即時資料，請確認代號是否正確。"
             st.session_state.ai_chat_history.append({"role": "assistant", "content": reply_txt})
             st.rerun()
