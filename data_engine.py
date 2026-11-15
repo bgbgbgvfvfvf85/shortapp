@@ -1,4 +1,4 @@
-# 檔案名稱：data_engine.py (v11.0 機構全維度動態評分 + 營收YoY加速度 + 匯率/費半相關係數 + 全市場活水自動歸類族群引擎)
+# 檔案名稱：data_engine.py (v11.0 極速精簡架構 + 機構級個股/大盤動態評分 + 全市場動態族群活水引擎)
 import os, re, io, csv, json, math, time, base64, urllib.parse, urllib3, requests
 from requests.adapters import HTTPAdapter
 import xml.etree.ElementTree as ET
@@ -10,22 +10,18 @@ import streamlit as st
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# ==========================================
-# 0. 全域 TCP 連線池 (省去重複 SSL 握手時間)
-# ==========================================
 GLOBAL_HTTP_SESSION = requests.Session()
 _adapter = HTTPAdapter(pool_connections=24, pool_maxsize=24, max_retries=1)
 GLOBAL_HTTP_SESSION.mount("https://", _adapter)
 GLOBAL_HTTP_SESSION.mount("http://", _adapter)
 GLOBAL_HTTP_SESSION.headers.update({
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
     "Cache-Control": "no-cache", "Pragma": "no-cache"
 })
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "arsenal_data")
 QUOTES_FILE, FUTURES_FILE, CB_FILE = [os.path.join(DATA_DIR, f) for f in ("daily_quotes.csv", "futures_list.csv", "cb_list.csv")]
 CONFIG_FILE, CUSTOM_SECTORS_FILE = [os.path.join(DATA_DIR, f) for f in ("config.json", "custom_sectors.json")]
-INDUSTRY_CACHE_FILE = os.path.join(DATA_DIR, "industry_map.json")
 ADMIN_SECRET_CODE = "admin888"
 
 DEFAULT_SECTOR_STOCKS_MAP = {
@@ -47,18 +43,18 @@ DEFAULT_SECTOR_STOCKS_MAP = {
     "16. 貨櫃航運與塑化原物料": [["2603", "長榮", "TWSE"], ["2609", "陽明", "TWSE"], ["2615", "萬海", "TWSE"], ["1303", "南亞", "TWSE"], ["1101", "台泥", "TWSE"], ["2002", "中鋼", "TWSE"]]
 }
 
-# 官方產業與關鍵字自動映射至 16 大族群規則 (讓全市場新飆股自動歸隊！)
-OFFICIAL_IND_TO_16_MAP = {
-    "通信網路業": "4. CPO矽光子與光通訊",
-    "電腦及週邊設備業": "9. AI伺服器與組裝代工",
-    "電機機械": "15. 重電電網與綠能儲能",
-    "航運業": "16. 貨櫃航運與塑化原物料",
-    "鋼鐵工業": "16. 貨櫃航運與塑化原物料",
-    "塑膠工業": "16. 貨櫃航運與塑化原物料",
+# 官方產業名稱對應至 16 大核心戰略族群之智慧映射表 (供全市場新飆股自動歸隊)
+INDUSTRY_TO_SECTOR_BRIDGE = {
+    "通信網路業": "4. CPO矽光子與光通訊", "光電業": "4. CPO矽光子與光通訊",
+    "電腦及週邊設備業": "9. AI伺服器與組裝代工", "電機機械": "15. 重電電網與綠能儲能",
+    "電器電纜": "15. 重電電網與綠能儲能", "航運業": "16. 貨櫃航運與塑化原物料",
+    "鋼鐵工業": "16. 貨櫃航運與塑化原物料", "塑膠工業": "16. 貨櫃航運與塑化原物料",
+    "其他電子業": "2. CoWoS與先進封裝設備", "電子零組件業": "7. PCB硬板與伺服器板",
+    "半導體業": "10. ASIC矽智財與IC設計"
 }
 
 # ==========================================
-# 1. 檔案讀寫與設定檔管理 (含自動載入全台股 2100+ 檔股票與 ETF)
+# 1. 設定檔與全市場名冊管理
 # ==========================================
 def load_sector_map():
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -84,21 +80,18 @@ def load_config():
         "lock_tab3": True, "pwd_tab3": "FUT888", "lock_tab4": False, "pwd_tab4": "VIP888",
         "public_promo_mode": False, "gemini_api_key": "", "finmind_token": "",
         "broker_line_url": "https://line.me/ti/p/~your_line_id",
-        "mkt_foreign_oi": -36850, "mkt_foreign_oi_chg": -1420, "mkt_trust_oi": 24500, "mkt_dealer_oi": -12800,
-        "mkt_spot_foreign": 159.22, "mkt_spot_trust": 118.07, "mkt_spot_dealer": 21.65,
-        "mkt_margin_bal": 6233.87, "mkt_margin_chg": -104.93, "mkt_margin_chg_3d": -147.13,
-        "mkt_short_bal": 217708, "mkt_short_chg": 1169, "cnn_fear_greed": 34,
-        "mkt_chip_date": ""
+        "mkt_foreign_oi": -36850, "mkt_foreign_oi_chg": -1420, "mkt_spot_foreign": 159.22,
+        "mkt_spot_trust": 118.07, "mkt_spot_dealer": 21.65, "mkt_margin_bal": 6233.87,
+        "mkt_margin_chg": -104.93, "mkt_margin_chg_3d": -147.13, "mkt_short_bal": 217708,
+        "mkt_short_chg": 1169, "cnn_fear_greed": 34, "mkt_chip_date": ""
     }
     try:
         for k in list(cfg.keys()):
             if k in st.secrets: cfg[k] = st.secrets[k]
     except Exception: pass
-
     if os.path.exists(CONFIG_FILE):
         try:
-            with open(CONFIG_FILE, "r", encoding="utf-8") as f: saved = json.load(f)
-            cfg.update(saved)
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f: cfg.update(json.load(f))
         except Exception: pass
     return cfg
 
@@ -112,30 +105,28 @@ def read_csv_safely(filepath):
     return pd.DataFrame()
 
 def sync_stock_code_list_online():
-    headers, stock_dict = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}, {}
-    valid_pattern = re.compile(r"^(\d{4}|00\d{2,4}[A-Z]?)$")
+    stock_dict, valid_pat = {}, re.compile(r"^(\d{4}|00\d{2,4}[A-Z]?)$")
     for url, mkt, c_key, n_key in [
         ("https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL", "TWSE", "Code", "Name"),
         ("https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes", "TPEX", "SecuritiesCompanyCode", "CompanyName")
     ]:
         try:
-            r = GLOBAL_HTTP_SESSION.get(url, headers=headers, timeout=12, verify=False)
+            r = GLOBAL_HTTP_SESSION.get(url, timeout=10, verify=False)
             if r.status_code == 200:
-                for item in r.json():
-                    code, name = str(item.get(c_key, "")).strip(), str(item.get(n_key, "")).strip()
-                    if valid_pattern.match(code) and name:
-                        stock_dict[code] = {"代號": code, "名稱": name, "市場": mkt, "投本比": 0.0, "外本比": 0.0}
+                for it in r.json():
+                    c, n = str(it.get(c_key, "")).strip(), str(it.get(n_key, "")).strip()
+                    if valid_pat.match(c) and n: stock_dict[c] = {"代號": c, "名稱": n, "市場": mkt, "投本比": 0.0, "外本比": 0.0}
         except Exception: pass
     if len(stock_dict) > 500:
         df_new = pd.DataFrame(list(stock_dict.values())).sort_values("代號")
         df_new.to_csv(QUOTES_FILE, index=False, encoding="utf-8-sig")
-        return True, f"🎉 成功更新 {len(df_new)} 檔上市櫃股票與全品項 ETF 名冊！"
-    return False, "同步清單失敗，請稍後再試。"
+        return True, f"🎉 成功更新 {len(df_new)} 檔上市櫃股票與全品項 ETF！"
+    return False, "同步清單失敗。"
 
 def sync_taifex_futures_online():
-    headers, records = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}, {}
+    records = {}
     try:
-        resp = GLOBAL_HTTP_SESSION.get("https://www.taifex.com.tw/cht/5/stockMargining", headers=headers, timeout=12, verify=False)
+        resp = GLOBAL_HTTP_SESSION.get("https://www.taifex.com.tw/cht/5/stockMargining", timeout=10, verify=False)
         resp.encoding = "utf-8"
         for r_html in re.findall(r"<tr[^>]*>(.*?)</tr>", resp.text, re.S):
             clean_txt = " ".join(re.sub(r"<[^>]+>", " ", r_html).split())
@@ -143,49 +134,32 @@ def sync_taifex_futures_online():
             if m_code:
                 code = m_code.group(1)
                 rates = [float(x) for x in re.findall(r"(\d{2}\.\d{1,2})%", clean_txt) if 10.0 <= float(x) <= 50.0]
-                zh_match = re.search(r"([\u4e00-\u9fa5A-Za-z0-9]{2,8}期)", clean_txt)
-                fut_name = (zh_match.group(1) if zh_match else f"{code}期").replace("小型", "")
+                zh_m = re.search(r"([\u4e00-\u9fa5A-Za-z0-9]{2,8}期)", clean_txt)
+                fut_name = (zh_m.group(1) if zh_m else f"{code}期").replace("小型", "")
                 if code not in records:
                     records[code] = {"代號": code, "期貨簡稱": fut_name, "標準期貨": "有", "小型期貨": "有" if "小型" in clean_txt else "無", "保證金比例": max(rates) if rates else 13.50}
                 else: records[code]["小型期貨"] = "有"
     except Exception as e: return False, f"連線異常：{e}"
     if records:
-        df_new = pd.DataFrame(list(records.values()))
-        df_new.to_csv(FUTURES_FILE, index=False, encoding="utf-8-sig")
-        return True, f"🎉 成功同步 {len(df_new)} 檔個股期貨與保證金級距！"
-    return False, "未能從期交所解析出資料。"
+        pd.DataFrame(list(records.values())).to_csv(FUTURES_FILE, index=False, encoding="utf-8-sig")
+        return True, f"🎉 成功同步 {len(records)} 檔個股期貨！"
+    return False, "未能解析出期貨資料。"
 
 def init_sample_csvs():
     os.makedirs(DATA_DIR, exist_ok=True)
     if not os.path.exists(QUOTES_FILE):
-        pd.DataFrame([
-            ["2330", "台積電", "TWSE", 0.0, 0.0], ["2383", "台光電", "TWSE", 0.0, 0.0], ["3017", "奇鋐", "TWSE", 0.0, 0.0],
-            ["0050", "元大台灣50", "TWSE", 0.0, 0.0], ["0056", "元大高股息", "TWSE", 0.0, 0.0], ["00878", "國泰永續高股息", "TWSE", 0.0, 0.0],
-            ["00919", "群益台灣精選高息", "TWSE", 0.0, 0.0], ["00937B", "群益ESG投等債20+", "TPEX", 0.0, 0.0], ["00679B", "元大美債20年", "TPEX", 0.0, 0.0]
-        ], columns=["代號", "名稱", "市場", "投本比", "外本比"]).to_csv(QUOTES_FILE, index=False, encoding="utf-8-sig")
+        pd.DataFrame([["2330", "台積電", "TWSE", 0.0, 0.0], ["0050", "元大台灣50", "TWSE", 0.0, 0.0]], columns=["代號", "名稱", "市場", "投本比", "外本比"]).to_csv(QUOTES_FILE, index=False, encoding="utf-8-sig")
     if not os.path.exists(FUTURES_FILE):
-        pd.DataFrame([
-            ["2330", "台積電期", "有", "有", 13.50], ["2383", "台光電期", "有", "有", 20.25], ["3017", "奇鋐期", "有", "有", 20.25],
-            ["2603", "長榮期", "有", "有", 13.50], ["1101", "台泥期", "有", "有", 13.50], ["1303", "南亞期", "有", "有", 20.25],
-            ["3189", "景碩期", "有", "無", 21.60], ["3037", "欣興期", "有", "有", 21.60], ["8358", "金居期", "有", "無", 24.30]
-        ], columns=["代號", "期貨簡稱", "標準期貨", "小型期貨", "保證金比例"]).to_csv(FUTURES_FILE, index=False, encoding="utf-8-sig")
+        pd.DataFrame([["2330", "台積電期", "有", "有", 13.50]], columns=["代號", "期貨簡稱", "標準期貨", "小型期貨", "保證金比例"]).to_csv(FUTURES_FILE, index=False, encoding="utf-8-sig")
     if not os.path.exists(CB_FILE):
-        pd.DataFrame([
-            ["2383", "23835", "台光電五", 585.0, 118.5, "2028-05-15"], ["3017", "30175", "奇鋐五", 630.0, 115.0, "2028-09-20"], ["2603", "26034", "長榮四", 195.0, 112.0, "2027-11-01"]
-        ], columns=["代號", "CB代號", "CB名稱", "轉換價", "CB收盤價", "到期日"]).to_csv(CB_FILE, index=False, encoding="utf-8-sig")
-
+        pd.DataFrame([["2383", "23835", "台光電五", 585.0, 118.5, "2028-05-15"]], columns=["代號", "CB代號", "CB名稱", "轉換價", "CB收盤價", "到期日"]).to_csv(CB_FILE, index=False, encoding="utf-8-sig")
     try:
-        df_q = read_csv_safely(QUOTES_FILE)
-        if len(df_q) < 500:
-            sync_stock_code_list_online()
-        df_f = read_csv_safely(FUTURES_FILE)
-        if len(df_f) < 50:
-            sync_taifex_futures_online()
-    except Exception:
-        pass
+        if len(read_csv_safely(QUOTES_FILE)) < 500: sync_stock_code_list_online()
+        if len(read_csv_safely(FUTURES_FILE)) < 30: sync_taifex_futures_online()
+    except Exception: pass
 
 # ==========================================
-# 2. 升降檔位與當沖數學試算核心
+# 2. 當沖升降檔位與損益試算核心
 # ==========================================
 def get_tw_tick_size(price, is_up=True):
     p = round(float(price), 2)
@@ -209,32 +183,31 @@ def calc_trade_row_min20(buy_p, sell_p, lots, fold, tax_rate):
     fee_sell = max(20, math.floor(sell_amt * fee_rate)) if sell_amt > 0 else 0
     tax = math.floor(sell_amt * tax_rate)
     total_fee, total_cost = fee_buy + fee_sell, fee_buy + fee_sell + tax
-    gross_pnl, net_pnl = sell_amt - buy_amt, (sell_amt - buy_amt) - total_cost
+    net_pnl = (sell_amt - buy_amt) - total_cost
+    long_be = round(((buy_amt + fee_buy + max(20, buy_amt * fee_rate)) / max(1e-6, 1.0 - tax_rate)) / (1000.0 * lots), 2)
+    short_be = round(max(0.01, (sell_amt - fee_sell - tax - max(20, sell_amt * fee_rate)) / (1000.0 * lots)), 2)
 
-    long_be_price = round(((buy_amt + fee_buy + max(20, buy_amt * fee_rate)) / max(1e-6, 1.0 - tax_rate)) / (1000.0 * lots), 2)
-    short_be_price = round(max(0.01, (sell_amt - fee_sell - tax - max(20, sell_amt * fee_rate)) / (1000.0 * lots)), 2)
-
-    long_win_ticks, long_win_price = 1, step_tw_ticks(buy_p, 1)
+    long_wt, long_wp = 1, step_tw_ticks(buy_p, 1)
     for t_i in range(1, 25):
-        cand_s = step_tw_ticks(buy_p, t_i)
-        c_amt = int(round(cand_s * 1000.0 * lots))
-        if (c_amt - buy_amt - fee_buy - max(20, math.floor(c_amt * fee_rate)) - math.floor(c_amt * tax_rate)) > 0:
-            long_win_ticks, long_win_price = t_i, cand_s; break
+        cs = step_tw_ticks(buy_p, t_i)
+        ca = int(round(cs * 1000.0 * lots))
+        if (ca - buy_amt - fee_buy - max(20, math.floor(ca * fee_rate)) - math.floor(ca * tax_rate)) > 0:
+            long_wt, long_wp = t_i, cs; break
 
-    short_win_ticks, short_win_price = 1, step_tw_ticks(sell_p, -1)
+    short_wt, short_wp = 1, step_tw_ticks(sell_p, -1)
     for t_i in range(1, 25):
-        cand_b = step_tw_ticks(sell_p, -t_i)
-        c_amt = int(round(cand_b * 1000.0 * lots))
-        if (sell_amt - c_amt - max(20, math.floor(c_amt * fee_rate)) - fee_sell - tax) > 0:
-            short_win_ticks, short_win_price = t_i, cand_b; break
+        cb = step_tw_ticks(sell_p, -t_i)
+        ca = int(round(cb * 1000.0 * lots))
+        if (sell_amt - ca - max(20, math.floor(ca * fee_rate)) - fee_sell - tax) > 0:
+            short_wt, short_wp = t_i, cb; break
 
     return {
         "buy_amt": buy_amt, "sell_amt": sell_amt, "fee_buy": fee_buy, "fee_sell": fee_sell,
-        "total_fee": total_fee, "tax": tax, "total_cost": total_cost, "gross_pnl": gross_pnl,
-        "net_pnl": net_pnl, "roi_pct": round((net_pnl / (buy_amt + fee_buy)) * 100.0, 2) if buy_amt > 0 else 0.0,
-        "long_be_price": long_be_price, "short_be_price": short_be_price,
-        "long_win_ticks": long_win_ticks, "long_win_price": long_win_price,
-        "short_win_ticks": short_win_ticks, "short_win_price": short_win_price
+        "total_fee": total_fee, "tax": tax, "total_cost": total_cost, "net_pnl": net_pnl,
+        "roi_pct": round((net_pnl / (buy_amt + fee_buy)) * 100.0, 2) if buy_amt > 0 else 0.0,
+        "long_be_price": long_be, "short_be_price": short_be,
+        "long_win_ticks": long_wt, "long_win_price": long_wp,
+        "short_win_ticks": short_wt, "short_win_price": short_wp
     }
 
 def calculate_cdp(high, low, close):
@@ -242,30 +215,20 @@ def calculate_cdp(high, low, close):
     return {"AH": round(cdp + pt, 2), "NH": round(2 * cdp - low, 2), "CDP": round(cdp, 2), "NL": round(2 * cdp - high, 2), "AL": round(cdp - pt, 2), "PT": round(pt, 2)}
 
 # ==========================================
-# 3. 技術指標、三週期K線 (日K/60分K/5分K) 與盤前09:00時間閘門引擎
+# 3. K線、三週期指標與基本面營收/外本比抓取引擎
 # ==========================================
 def clean_holiday_phantom_bars(df_in, is_index=False):
     if df_in.empty: return df_in
-    df = df_in.copy()
-    df = df[df.index.dayofweek < 5]
+    df = df_in[df_in.index.dayofweek < 5].copy()
     if df.empty: return df
-
     now_tw = pd.Timestamp.now(tz="Asia/Taipei")
-    today_str = now_tw.strftime("%Y-%m-%d")
-    is_pre_market = (now_tw.hour < 9)
-
-    if len(df) > 1 and df.index[-1].strftime("%Y-%m-%d") == today_str:
-        last_h, last_l, last_v = float(df["High"].iloc[-1]), float(df["Low"].iloc[-1]), float(df["Volume"].iloc[-1])
-        if is_pre_market or (abs(last_h - last_l) < 1e-5 and last_v <= 0):
+    if len(df) > 1 and df.index[-1].strftime("%Y-%m-%d") == now_tw.strftime("%Y-%m-%d"):
+        if now_tw.hour < 9 or (abs(float(df["High"].iloc[-1]) - float(df["Low"].iloc[-1])) < 1e-5 and float(df["Volume"].iloc[-1]) <= 0):
             df = df.iloc[:-1]
-
     if not is_index:
         df = df[~((df["Volume"] <= 0) & ((df["High"] - df["Low"]).abs() < 1e-5))]
-    else:
-        if len(df) > 5:
-            prev_c = df["Close"].shift(1)
-            phantom_idx = ((df["High"] - df["Low"]).abs() < 1e-4) & ((df["Close"] - prev_c).abs() < 1e-4)
-            df = df[~phantom_idx]
+    elif len(df) > 5:
+        df = df[~(((df["High"] - df["Low"]).abs() < 1e-4) & ((df["Close"] - df["Close"].shift(1)).abs() < 1e-4))]
     return df
 
 def compute_td_sequential_and_bbands(df_in):
@@ -273,644 +236,589 @@ def compute_td_sequential_and_bbands(df_in):
     df["MA5"], df["MA20"], df["MA60"] = df["Close"].rolling(5).mean(), df["Close"].rolling(20).mean(), df["Close"].rolling(60).mean()
     std20 = df["Close"].rolling(20).std(ddof=0)
     df["BB_Upper"], df["BB_Lower"] = df["MA20"] + 2.0 * std20, df["MA20"] - 2.0 * std20
-
-    closes = df["Close"].values
-    n_len = len(closes)
-    raw_buy, raw_sell, disp_buy, disp_sell = [0]*n_len, [0]*n_len, [0]*n_len, [0]*n_len
-    b_cnt = s_cnt = 0
+    closes, n_len = df["Close"].values, len(df)
+    raw_b, raw_s, disp_b, disp_s = [0]*n_len, [0]*n_len, [0]*n_len, [0]*n_len
+    b_c = s_c = 0
     for i in range(n_len):
         if i >= 4:
-            if closes[i] < closes[i - 4]: b_cnt, s_cnt = (b_cnt + 1 if b_cnt < 9 else 1), 0
-            elif closes[i] > closes[i - 4]: s_cnt, b_cnt = (s_cnt + 1 if s_cnt < 9 else 1), 0
-            else: b_cnt = s_cnt = 0
-        raw_buy[i], raw_sell[i] = b_cnt, s_cnt
-
+            if closes[i] < closes[i - 4]: b_c, s_c = (b_c + 1 if b_c < 9 else 1), 0
+            elif closes[i] > closes[i - 4]: s_c, b_c = (s_c + 1 if s_c < 9 else 1), 0
+            else: b_c = s_c = 0
+        raw_b[i], raw_s[i] = b_c, s_c
     for i in range(n_len):
-        if raw_buy[i] == 9:
+        if raw_b[i] == 9:
             for k in range(9):
-                if i - k >= 0: disp_buy[i - k] = 9 - k
-        if raw_sell[i] == 9:
+                if i - k >= 0: disp_b[i - k] = 9 - k
+        if raw_s[i] == 9:
             for k in range(9):
-                if i - k >= 0: disp_sell[i - k] = 9 - k
-
-    if n_len > 0 and 0 < raw_buy[-1] < 9:
-        for k in range(raw_buy[-1]):
-            if n_len - 1 - k >= 0: disp_buy[n_len - 1 - k] = raw_buy[-1] - k
-    if n_len > 0 and 0 < raw_sell[-1] < 9:
-        for k in range(raw_sell[-1]):
-            if n_len - 1 - k >= 0: disp_sell[n_len - 1 - k] = raw_sell[-1] - k
-
-    df["TD_Buy"], df["TD_Sell"], df["TD_Buy_Disp"], df["TD_Sell_Disp"] = raw_buy, raw_sell, disp_buy, disp_sell
+                if i - k >= 0: disp_s[i - k] = 9 - k
+    if n_len > 0 and 0 < raw_b[-1] < 9:
+        for k in range(raw_b[-1]):
+            if n_len - 1 - k >= 0: disp_b[n_len - 1 - k] = raw_b[-1] - k
+    if n_len > 0 and 0 < raw_s[-1] < 9:
+        for k in range(raw_s[-1]):
+            if n_len - 1 - k >= 0: disp_s[n_len - 1 - k] = raw_s[-1] - k
+    df["TD_Buy"], df["TD_Sell"], df["TD_Buy_Disp"], df["TD_Sell_Disp"] = raw_b, raw_s, disp_b, disp_s
     return df
 
 def calc_kd_rsi_macd(hist):
     low_9, high_9 = hist["Low"].rolling(9).min(), hist["High"].rolling(9).max()
     rsv = (((hist["Close"] - low_9) / (high_9 - low_9 + 1e-9)) * 100).fillna(50)
-    k_vals, d_vals = [50.0], [50.0]
+    k_v, d_v = [50.0], [50.0]
     for r in rsv:
-        k_vals.append((2/3) * k_vals[-1] + (1/3) * float(r))
-        d_vals.append((2/3) * d_vals[-1] + (1/3) * k_vals[-1])
+        k_v.append((2/3) * k_v[-1] + (1/3) * float(r))
+        d_v.append((2/3) * d_v[-1] + (1/3) * k_v[-1])
     dif = hist["Close"].ewm(span=12, adjust=False).mean() - hist["Close"].ewm(span=26, adjust=False).mean()
     osc = dif - dif.ewm(span=9, adjust=False).mean()
     delta = hist["Close"].diff()
-    gain = delta.clip(lower=0).ewm(alpha=1/14, adjust=False).mean()
-    loss = (-delta.clip(upper=0)).ewm(alpha=1/14, adjust=False).mean()
-    rs = gain / (loss + 1e-9)
+    rs = delta.clip(lower=0).ewm(alpha=1/14, adjust=False).mean() / ((-delta.clip(upper=0)).ewm(alpha=1/14, adjust=False).mean() + 1e-9)
     rsi14 = round(float((100 - (100 / (1 + rs))).iloc[-1]), 1) if len(hist) >= 15 else 50.0
-    return round(k_vals[-1], 1), round(d_vals[-1], 1), round(k_vals[-2], 1), round(d_vals[-2], 1), round(float(osc.iloc[-1]), 2), round(float(osc.iloc[-2]), 2) if len(osc)>=2 else 0.0, rsi14
+    return round(k_v[-1], 1), round(d_v[-1], 1), round(k_v[-2], 1), round(d_v[-2], 1), round(float(osc.iloc[-1]), 2), round(float(osc.iloc[-2]), 2) if len(osc)>=2 else 0.0, rsi14
 
 def fetch_kline_df_bypass_ssl(code, market_hint="TWSE", range_str="6mo"):
-    error_logs = []
     is_idx = code in ["^TWII", "TAIEX", "^SOX", "TWD=X"]
-    if code in ["^TWII", "TAIEX"]: symbols = ["%5ETWII"]
+    if code == "^TWII": symbols = ["%5ETWII"]
     elif code == "^SOX": symbols = ["%5ESOX"]
     elif code == "TWD=X": symbols = ["TWD%3DX"]
     else: symbols = [f"{code}{sfx}" for sfx in ([".TWO", ".TW"] if market_hint == "TPEX" else [".TW", ".TWO"])]
-    ts_bucket = int(time.time() // 180)
-
+    ts_b = int(time.time() // 180)
     for sym in symbols:
         for host in ["query2.finance.yahoo.com", "query1.finance.yahoo.com"]:
             try:
-                url = f"https://{host}/v8/finance/chart/{sym}?range={range_str}&interval=1d&includePrePost=false&_ts={ts_bucket}"
-                resp = GLOBAL_HTTP_SESSION.get(url, timeout=5, verify=False)
+                resp = GLOBAL_HTTP_SESSION.get(f"https://{host}/v8/finance/chart/{sym}?range={range_str}&interval=1d&includePrePost=false&_ts={ts_b}", timeout=5, verify=False)
                 if resp.status_code == 200:
-                    res_list = resp.json().get("chart", {}).get("result", [])
-                    if res_list:
-                        res_obj = res_list[0]
-                        timestamps = res_obj.get("timestamp", [])
-                        quote = res_obj.get("indicators", {}).get("quote", [{}])[0]
-                        if timestamps and "close" in quote:
-                            tw_dates = pd.to_datetime(timestamps, unit="s", utc=True).tz_convert("Asia/Taipei").normalize()
-                            df_tmp = pd.DataFrame({
-                                "Open": quote.get("open", quote["close"]), "High": quote.get("high", quote["close"]),
-                                "Low": quote.get("low", quote["close"]), "Close": quote["close"], "Volume": quote.get("volume", [0]*len(timestamps))
-                            }, index=tw_dates)
-                            df_tmp = df_tmp[~df_tmp.index.duplicated(keep="last")].dropna(subset=["Close"])
-                            for col in ["Open", "High", "Low"]: df_tmp[col] = df_tmp[col].fillna(df_tmp["Close"])
-                            df_tmp["Volume"] = df_tmp["Volume"].fillna(0)
-                            df_tmp = clean_holiday_phantom_bars(df_tmp, is_index=is_idx)
-                            if len(df_tmp) >= 5: return df_tmp, ""
-            except Exception as e: error_logs.append(f"Y({host[:6]}):{str(e)[:35]}")
-
-    if code not in ["^SOX", "TWD=X"]:
-        try:
-            start_dt = (pd.Timestamp.now() - pd.Timedelta(days=190 if range_str == "6mo" else 75)).strftime("%Y-%m-%d")
-            resp = GLOBAL_HTTP_SESSION.get("https://api.finmindtrade.com/api/v4/data", params={"dataset": "TaiwanStockPrice", "data_id": "TAIEX" if is_idx else code, "start_date": start_dt}, timeout=7, verify=False)
-            if resp.status_code == 200 and resp.json().get("data"):
-                df_fm = pd.DataFrame(resp.json()["data"])
-                df_fm["Date"] = pd.to_datetime(df_fm["date"]).dt.tz_localize("Asia/Taipei")
-                df_fm = df_fm.set_index("Date")
-                df_fm = df_fm[~df_fm.index.duplicated(keep="last")]
-                vol_col = "Trading_Volume" if "Trading_Volume" in df_fm.columns else ("volume" if "volume" in df_fm.columns else None)
-                df_tmp = pd.DataFrame({
-                    "Open": df_fm["open"].astype(float), "High": df_fm["max"].astype(float),
-                    "Low": df_fm["min"].astype(float), "Close": df_fm["close"].astype(float),
-                    "Volume": df_fm[vol_col].astype(float) if vol_col else 0.0
-                }).dropna(subset=["Close"])
-                df_tmp = clean_holiday_phantom_bars(df_tmp, is_index=is_idx)
-                if len(df_tmp) >= 5: return df_tmp, ""
-        except Exception as e: error_logs.append(f"FM:{str(e)[:40]}")
-    return pd.DataFrame(), " | ".join(error_logs[:2])
+                    res = resp.json().get("chart", {}).get("result", [])
+                    if res and res[0].get("timestamp") and "close" in res[0].get("indicators", {}).get("quote", [{}])[0]:
+                        ts, q = res[0]["timestamp"], res[0]["indicators"]["quote"][0]
+                        df_tmp = pd.DataFrame({"Open": q.get("open", q["close"]), "High": q.get("high", q["close"]), "Low": q.get("low", q["close"]), "Close": q["close"], "Volume": q.get("volume", [0]*len(ts))}, index=pd.to_datetime(ts, unit="s", utc=True).tz_convert("Asia/Taipei").normalize())
+                        df_tmp = df_tmp[~df_tmp.index.duplicated(keep="last")].dropna(subset=["Close"])
+                        for c in ["Open", "High", "Low"]: df_tmp[c] = df_tmp[c].fillna(df_tmp["Close"])
+                        df_tmp["Volume"] = df_tmp["Volume"].fillna(0)
+                        df_tmp = clean_holiday_phantom_bars(df_tmp, is_index=is_idx)
+                        if len(df_tmp) >= 5: return df_tmp, ""
+            except Exception: continue
+    return pd.DataFrame(), "連線逾時"
 
 @st.cache_data(ttl=180)
 def fetch_intraday_kline_full(code, market_hint="TWSE", interval="5m"):
-    range_str = "5d" if interval == "5m" else "1mo"
-    ts_bucket = int(time.time() // 180)
+    range_str, ts_b = ("5d" if interval == "5m" else "1mo"), int(time.time() // 180)
     for sfx in ([".TWO", ".TW"] if market_hint == "TPEX" else [".TW", ".TWO"]):
         for host in ["query2.finance.yahoo.com", "query1.finance.yahoo.com"]:
             try:
-                url = f"https://{host}/v8/finance/chart/{code}{sfx}?range={range_str}&interval={interval}&includePrePost=false&_ts={ts_bucket}"
-                resp = GLOBAL_HTTP_SESSION.get(url, timeout=5, verify=False)
+                resp = GLOBAL_HTTP_SESSION.get(f"https://{host}/v8/finance/chart/{code}{sfx}?range={range_str}&interval={interval}&includePrePost=false&_ts={ts_b}", timeout=5, verify=False)
                 if resp.status_code == 200:
-                    res_list = resp.json().get("chart", {}).get("result", [])
-                    if res_list:
-                        timestamps = res_list[0].get("timestamp", [])
-                        quote = res_list[0].get("indicators", {}).get("quote", [{}])[0]
-                        if timestamps and "close" in quote:
-                            dt_idx = pd.to_datetime(timestamps, unit="s", utc=True).tz_convert("Asia/Taipei")
-                            df_intra = pd.DataFrame({
-                                "DateStr": dt_idx.strftime("%m/%d %H:%M"),
-                                "ShortDate": dt_idx.strftime("%m/%d %H:%M"),
-                                "Open": quote.get("open", quote["close"]),
-                                "High": quote.get("high", quote["close"]),
-                                "Low": quote.get("low", quote["close"]),
-                                "Close": quote["close"],
-                                "Volume": quote.get("volume", [0]*len(timestamps))
-                            }).dropna(subset=["Close"])
-                            for col in ["Open", "High", "Low"]:
-                                df_intra[col] = df_intra[col].fillna(df_intra["Close"])
-                            df_intra["Volume"] = (df_intra["Volume"].fillna(0) / 1000.0).round(0)
-                            df_intra = df_intra[df_intra["Volume"] > 0].reset_index(drop=True)
-                            if len(df_intra) >= 15:
-                                df_intra = compute_td_sequential_and_bbands(df_intra)
-                                k_v, d_v, _, _, osc_v, _, rsi_v = calc_kd_rsi_macd(df_intra)
-                                latest = df_intra.iloc[-1]
-                                close_p = round(float(latest["Close"]), 2)
-                                ma5 = round(float(latest["MA5"]), 2) if pd.notna(latest["MA5"]) else close_p
-                                ma20 = round(float(latest["MA20"]), 2) if pd.notna(latest["MA20"]) else close_p
-                                ma60 = round(float(latest["MA60"]), 2) if pd.notna(latest["MA60"]) else ma20
-                                bb_up = round(float(latest["BB_Upper"]), 2) if pd.notna(latest["BB_Upper"]) else close_p
-                                bb_dn = round(float(latest["BB_Lower"]), 2) if pd.notna(latest["BB_Lower"]) else close_p
-                                deduct20 = round(float(df_intra["Close"].iloc[-20]), 2) if len(df_intra) >= 20 else close_p
-                                tail_n = 85 if interval == "5m" else 80
-                                return {
-                                    "ok": True, "interval": interval, "time_str": str(latest["DateStr"]),
-                                    "close": close_p, "ma5": ma5, "ma20": ma20, "ma60": ma60,
-                                    "bb_upper": bb_up, "bb_lower": bb_dn, "deduct": deduct20,
-                                    "td_buy": int(latest["TD_Buy"]), "td_sell": int(latest["TD_Sell"]),
-                                    "K": k_v, "D": d_v, "macd_osc": osc_v, "rsi": rsi_v,
-                                    "records": df_intra.tail(tail_n).to_dict("records")
-                                }
+                    res = resp.json().get("chart", {}).get("result", [])
+                    if res and res[0].get("timestamp"):
+                        ts, q = res[0]["timestamp"], res[0]["indicators"]["quote"][0]
+                        dt_idx = pd.to_datetime(ts, unit="s", utc=True).tz_convert("Asia/Taipei")
+                        df_i = pd.DataFrame({"DateStr": dt_idx.strftime("%m/%d %H:%M"), "ShortDate": dt_idx.strftime("%m/%d %H:%M"), "Open": q.get("open", q["close"]), "High": q.get("high", q["close"]), "Low": q.get("low", q["close"]), "Close": q["close"], "Volume": q.get("volume", [0]*len(ts))}).dropna(subset=["Close"])
+                        for c in ["Open", "High", "Low"]: df_i[c] = df_i[c].fillna(df_i["Close"])
+                        df_i["Volume"] = (df_i["Volume"].fillna(0) / 1000.0).round(0)
+                        df_i = df_i[df_i["Volume"] > 0].reset_index(drop=True)
+                        if len(df_i) >= 15:
+                            df_i = compute_td_sequential_and_bbands(df_i)
+                            k_v, d_v, _, _, osc_v, _, rsi_v = calc_kd_rsi_macd(df_i)
+                            lt = df_i.iloc[-1]
+                            cp = round(float(lt["Close"]), 2)
+                            return {
+                                "ok": True, "interval": interval, "time_str": str(lt["DateStr"]), "close": cp,
+                                "ma5": round(float(lt["MA5"]), 2) if pd.notna(lt["MA5"]) else cp,
+                                "ma20": round(float(lt["MA20"]), 2) if pd.notna(lt["MA20"]) else cp,
+                                "ma60": round(float(lt["MA60"]), 2) if pd.notna(lt["MA60"]) else cp,
+                                "bb_upper": round(float(lt["BB_Upper"]), 2) if pd.notna(lt["BB_Upper"]) else cp,
+                                "bb_lower": round(float(lt["BB_Lower"]), 2) if pd.notna(lt["BB_Lower"]) else cp,
+                                "deduct": round(float(df_i["Close"].iloc[-20]), 2) if len(df_i) >= 20 else cp,
+                                "td_buy": int(lt["TD_Buy"]), "td_sell": int(lt["TD_Sell"]), "K": k_v, "D": d_v, "macd_osc": osc_v, "rsi": rsi_v,
+                                "records": df_i.tail(85 if interval == "5m" else 80).to_dict("records")
+                            }
             except Exception: continue
     return {"ok": False, "interval": interval, "records": []}
-
-def evaluate_mtf_resonance(tech_1d, tech_60m, tech_5m, cdp_vals, bull_c="#FF6B6B", bear_c="#2ECC71", warn_c="#F1C40F"):
-    cdp_p = cdp_vals["CDP"]
-    nh_p, nl_p = cdp_vals["NH"], cdp_vals["NL"]
-
-    def _parse_tf(t_obj, label, is_5m=False):
-        if not t_obj or not t_obj.get("ok"):
-            return {"週期": label, "趨勢與扣抵": "資料載入中", "布林通道位階": "-", "神奇九轉(TD9)": "-", "KD / RSI 動能": "-", "bias": 0, "td_b": 0, "td_s": 0}
-        c, m20, ded = t_obj["close"], t_obj["ma20"], t_obj["deduct"]
-        bb_u, bb_l = t_obj["bb_upper"], t_obj["bb_lower"]
-        tb, ts = t_obj["td_buy"], t_obj["td_sell"]
-        kv, dv, rv = t_obj["K"], t_obj["D"], t_obj["rsi"]
-
-        if is_5m:
-            if c >= m20 and c >= cdp_p: trend_str, bias = f"🔴 站上20MA({m20}) & 站上CDP({cdp_p})", 1
-            elif c < m20 and c < cdp_p: trend_str, bias = f"🟢 跌破20MA({m20}) & 低於CDP({cdp_p})", -1
-            else: trend_str, bias = f"⚖️ 20MA({m20}) 與 CDP({cdp_p}) 間交戰", 0
-        else:
-            if c >= m20 and c >= ded: trend_str, bias = f"🔴 站上20MA({m20}) ＋ 扣抵({ded})助漲", 1
-            elif c < m20 and c < ded: trend_str, bias = f"🟢 跌破20MA({m20}) ＋ 扣抵({ded})反壓", -1
-            elif c >= m20: trend_str, bias = f"🟡 站上20MA({m20}) (惟扣抵{ded}較高)", 1
-            else: trend_str, bias = f"🟡 低於20MA({m20}) (惟扣抵{ded}在低檔)", -1
-
-        if c >= bb_u: bb_str = f"🔥 突破上軌 ({bb_u}) 強勢鈍化"
-        elif c <= bb_l: bb_str = f"🌱 觸及下軌 ({bb_l}) 超跌區"
-        elif c >= m20: bb_str = f"📈 中軌至上軌 ({bb_u}) 偏強區"
-        else: bb_str = f"📉 中軌至下軌 ({bb_l}) 整理區"
-
-        if tb >= 8: td_str = f"🔥 ▲低{tb} (短線超跌轉折訊號！)"
-        elif tb > 0: td_str = f"▲ 低九計數：第 {tb} 根"
-        elif ts >= 8: td_str = f"⚠️ ▼高{ts} (短線高檔衰竭警戒！)"
-        elif ts > 0: td_str = f"▼ 高九計數：第 {ts} 根"
-        else: td_str = "⚪ 無連續計數"
-
-        kd_str = f"{'🔴金叉' if kv >= dv else '🟢死叉'} K({kv}) / D({dv}) ｜ RSI {rv}"
-        return {"週期": label, "趨勢與扣抵": trend_str, "布林通道位階": bb_str, "神奇九轉(TD9)": td_str, "KD / RSI 動能": kd_str, "bias": bias, "td_b": tb, "td_s": ts, "k_up": kv >= dv}
-
-    r_1d = _parse_tf(tech_1d, "📅 日 K (波段大方向)", is_5m=False)
-    r_60m = _parse_tf(tech_60m, "⏱️ 60分K (隔日/波段轉折)", is_5m=False)
-    r_5m = _parse_tf(tech_5m, "⚡ 5分K (當沖進出場扳機)", is_5m=True)
-
-    b1, b60, b5 = r_1d["bias"], r_60m["bias"], r_5m["bias"]
-    low_td_signals = [name for name, r in [("日K", r_1d), ("60分K", r_60m), ("5分K", r_5m)] if r["td_b"] >= 7]
-    high_td_signals = [name for name, r in [("日K", r_1d), ("60分K", r_60m), ("5分K", r_5m)] if r["td_s"] >= 7]
-
-    if b1 > 0 and b60 > 0 and b5 > 0:
-        title = "🔥 【三週期多方強勢共振】日K ＋ 60分K ＋ 5分K 同步站上均線與 CDP 分水嶺！"
-        color = bull_c
-        desc = f"目前大（日K）、中（60分K）、小（5分K）三個時間週期趨勢一致偏多！盤中只要守穩 **CDP 分水嶺（{cdp_p}元）** 或 **5分K之20MA（{tech_5m.get('ma20', cdp_p)}元）**，順勢偏多操作勝率最高，切勿逆勢摸頭猜頂。"
-    elif b1 > 0 and b60 > 0 and b5 <= 0:
-        title = "🎯 【長多短回洗盤格局】日K 與 60分K 波段偏多，5分K 盤中拉回測試支撐！"
-        color = warn_c
-        desc = f"大方向（日K與60分K）均線維持多頭保護，僅 5分K 短線拉回整理。這屬於標準「多頭趨勢中的盤中震盪洗盤」，可密切留意 **5分K 出現 ▲低8/低9**、觸及 **布林下軌（{tech_5m.get('bb_lower', nl_p)}元）** 或 **CDP 常態支撐 NL（{nl_p}元）** 後重新站回 5分K 均線的低接契機！"
-    elif b1 < 0 and b60 < 0 and b5 < 0:
-        if len(low_td_signals) >= 2:
-            title = f"🌱 【空方宣洩末端 × 多週期低九共振】({'＋'.join(low_td_signals)} 同步進入低九轉折區！)"
-            color = warn_c
-            desc = f"雖然三週期均線仍處空方壓制，但 **{' 與 '.join(low_td_signals)}** 已同步出現連續下跌第 7~9 根的動能衰竭訊號！此時追空極易被急彈軋到，空單宜逢低於 **NL（{nl_p}元）/ 布林下軌** 分批停利，搶反彈者可等 5分K 站回 20MA 再出手。"
-        else:
-            title = "❄️ 【三週期空方壓制共振】日K ＋ 60分K ＋ 5分K 同步受制於均線與 CDP 反壓！"
-            color = bear_c
-            desc = f"大中小三個週期同步處於空頭壓制結構，上方月線與 **CDP 分水嶺（{cdp_p}元）** 構成雙重蓋頭反壓。盤中若有反彈至 **5分K 20MA** 或 **NH 壓力（{nh_p}元）** 附近受阻，宜採取偏空避險或觀望策略，切忌盲目攤平接刀。"
-    elif b1 < 0 and (b60 > 0 or b5 > 0):
-        title = "⚡ 【跌深反彈搶短格局】日K 仍在月線下，但 60分K / 5分K 率先轉強站上均線！"
-        color = warn_c
-        desc = f"短線分K（5分K/60分K）已率先吹響反彈號角並站上短期均線，適合短線當沖做多搶反彈；但因日K大趨勢上方仍有 **日K月線（{tech_1d['ma20']}元）** 反壓，多單走到 **5分K/60分K 布林上軌** 或出現 **▼高8/高9** 時宜果斷分批停利！"
-    else:
-        title = "⚖️ 【多空週期交錯震盪】各週期方向尚未一致，宜依 CDP 支撐壓力與九轉訊號區間操作"
-        color = warn_c
-        desc = f"目前日K、60分K與5分K處於多空拉鋸整理。盤中當沖建議以 **CDP 分水嶺（{cdp_p}元）** 為強弱界線，往下靠近 **NL 支撐（{nl_p}元）＋ 5分K低九** 找支撐、往上靠近 **NH 壓力（{nh_p}元）＋ 5分K高九** 留意調節。"
-
-    if high_td_signals and b5 >= 0:
-        desc += f" ⚠️ **特別提醒：{'、'.join(high_td_signals)} 已進入 ▼高7~高9 高檔九轉區，短線追高需防乖離拉回！**"
-    elif low_td_signals and b5 <= 0:
-        desc += f" 💡 **特別提醒：{'、'.join(low_td_signals)} 已進入 ▲低7~低9 低檔九轉區，隨時留意破底翻止跌訊號！**"
-
-    return {"title": title, "color": color, "desc": desc, "table": [
-        {k: r[k] for k in ["週期", "趨勢與扣抵", "布林通道位階", "神奇九轉(TD9)", "KD / RSI 動能"]}
-        for r in (r_1d, r_60m, r_5m)
-    ]}
 
 @st.cache_data(ttl=300)
 def fetch_technical_indicators(code, market_hint="TWSE"):
     hist, err_msg = fetch_kline_df_bypass_ssl(code, market_hint, range_str="6mo")
     if hist.empty or len(hist) < 5: return {"ok": False, "err_msg": err_msg}
     hist = compute_td_sequential_and_bbands(hist)
-    latest = hist.iloc[-1]
-    prev_1d = hist.iloc[-2] if len(hist) >= 2 else latest
-    prev_5d = hist.iloc[-6] if len(hist) >= 6 else prev_1d
-    trade_date = hist.index[-1].strftime("%Y-%m-%d")
-    close_p, high_p, low_p = round(float(latest["Close"]), 2), round(float(latest["High"]), 2), round(float(latest["Low"]), 2)
-    chg_1d_pct = round(((close_p - float(prev_1d["Close"])) / max(0.01, float(prev_1d["Close"]))) * 100.0, 2)
-    chg_5d_pct = round(((close_p - float(prev_5d["Close"])) / max(0.01, float(prev_5d["Close"]))) * 100.0, 2)
-
-    if abs(high_p - low_p) < 1e-4 and len(hist) >= 2:
-        half_r = max(0.5, round((float(prev_1d["High"]) - float(prev_1d["Low"])) * 0.5, 2))
-        high_p, low_p = round(close_p + half_r, 2), round(max(0.01, close_p - half_r), 2)
-
-    ma5 = round(float(hist["MA5"].iloc[-1]), 2) if pd.notna(hist["MA5"].iloc[-1]) else close_p
-    ma20 = round(float(hist["MA20"].iloc[-1]), 2) if pd.notna(hist["MA20"].iloc[-1]) else close_p
-    ma60 = round(float(hist["MA60"].iloc[-1]), 2) if pd.notna(hist["MA60"].iloc[-1]) else ma20
-    bb_up = round(float(hist["BB_Upper"].iloc[-1]), 2) if pd.notna(hist["BB_Upper"].iloc[-1]) else close_p
-    bb_dn = round(float(hist["BB_Lower"].iloc[-1]), 2) if pd.notna(hist["BB_Lower"].iloc[-1]) else close_p
-    deduct20, deduct_date = (round(float(hist["Close"].iloc[-20]), 2), hist.index[-20].strftime("%Y-%m-%d")) if len(hist) >= 20 else (close_p, trade_date)
-    k_val, d_val, _, _, osc_today, osc_prev, rsi14 = calc_kd_rsi_macd(hist)
+    lt = hist.iloc[-1]
+    cp, hp, lp = round(float(lt["Close"]), 2), round(float(lt["High"]), 2), round(float(lt["Low"]), 2)
+    prev_1d = float(hist["Close"].iloc[-2]) if len(hist) >= 2 else cp
+    prev_5d = float(hist["Close"].iloc[-6]) if len(hist) >= 6 else prev_1d
+    chg_1d_pct = round(((cp - prev_1d) / prev_1d) * 100.0, 2) if prev_1d > 0 else 0.0
+    chg_5d_pct = round(((cp - prev_5d) / prev_5d) * 100.0, 2) if prev_5d > 0 else 0.0
+    vol_5d_lots = round(float(hist["Volume"].tail(5).sum()) / 1000.0, 1)
     vol_ma5 = float(hist["Volume"].tail(5).mean())
-    vol_5d_lots = max(1.0, round(float(hist["Volume"].tail(5).sum()) / 1000.0, 1))
-    vol_ratio = round(float(latest["Volume"]) / vol_ma5, 2) if vol_ma5 > 0 else 1.0
-
-    # 與大盤加權指數比對算出 Alpha (相對強弱度)
-    mkt_1d_pct = mkt_5d_pct = 0.0
-    try:
-        m_hist, _ = fetch_kline_df_bypass_ssl("^TWII", "TWSE", range_str="2mo")
-        if len(m_hist) >= 6:
-            mc, mp1, mp5 = float(m_hist["Close"].iloc[-1]), float(m_hist["Close"].iloc[-2]), float(m_hist["Close"].iloc[-6])
-            mkt_1d_pct = round(((mc - mp1) / mp1) * 100.0, 2)
-            mkt_5d_pct = round(((mc - mp5) / mp5) * 100.0, 2)
-    except Exception: pass
-
-    alpha_1d = round(chg_1d_pct - mkt_1d_pct, 2)
-    alpha_5d = round(chg_5d_pct - mkt_5d_pct, 2)
-
+    k_val, d_val, _, _, osc_today, osc_prev, rsi14 = calc_kd_rsi_macd(hist)
     hist_60 = hist.tail(60).copy()
-    hist_60["DateStr"] = hist_60.index.strftime("%Y-%m-%d")
-    hist_60["ShortDate"] = hist_60.index.strftime("%m-%d")
+    hist_60["DateStr"], hist_60["ShortDate"] = hist_60.index.strftime("%Y-%m-%d"), hist_60.index.strftime("%m-%d")
     return {
-        "ok": True, "date": trade_date, "high": high_p, "low": low_p, "close": close_p,
-        "chg_1d_pct": chg_1d_pct, "chg_5d_pct": chg_5d_pct, "alpha_1d": alpha_1d, "alpha_5d": alpha_5d,
-        "vol_5d_lots": vol_5d_lots, "ma5": ma5, "ma20": ma20, "ma60": ma60, "bb_upper": bb_up, "bb_lower": bb_dn,
-        "td_buy": int(hist["TD_Buy"].iloc[-1]), "td_sell": int(hist["TD_Sell"].iloc[-1]),
-        "deduct": deduct20, "deduct_date": deduct_date, "K": k_val, "D": d_val,
-        "macd_osc": osc_today, "macd_prev": osc_prev, "rsi": rsi14, "vol_ratio": vol_ratio,
+        "ok": True, "date": hist.index[-1].strftime("%Y-%m-%d"), "high": hp, "low": lp, "close": cp,
+        "chg_1d_pct": chg_1d_pct, "chg_5d_pct": chg_5d_pct, "vol_5d_lots": max(1.0, vol_5d_lots),
+        "ma5": round(float(lt["MA5"]), 2) if pd.notna(lt["MA5"]) else cp,
+        "ma20": round(float(lt["MA20"]), 2) if pd.notna(lt["MA20"]) else cp,
+        "ma60": round(float(lt["MA60"]), 2) if pd.notna(lt["MA60"]) else cp,
+        "bb_upper": round(float(lt["BB_Upper"]), 2) if pd.notna(lt["BB_Upper"]) else cp,
+        "bb_lower": round(float(lt["BB_Lower"]), 2) if pd.notna(lt["BB_Lower"]) else cp,
+        "td_buy": int(lt["TD_Buy"]), "td_sell": int(lt["TD_Sell"]),
+        "deduct": round(float(hist["Close"].iloc[-20]), 2) if len(hist) >= 20 else cp,
+        "K": k_val, "D": d_val, "macd_osc": osc_today, "macd_prev": osc_prev, "rsi": rsi14,
+        "vol_ratio": round(float(lt["Volume"]) / vol_ma5, 2) if vol_ma5 > 0 else 1.0,
         "kline_60": hist_60[["DateStr", "ShortDate", "Open", "High", "Low", "Close", "Volume", "MA5", "MA20", "MA60", "BB_Upper", "BB_Lower", "TD_Buy", "TD_Sell", "TD_Buy_Disp", "TD_Sell_Disp"]].to_dict("records")
     }
 
 @st.cache_data(ttl=3600)
-def fetch_revenue_and_shareholding(code, fm_token=""):
+def fetch_fundamental_revenue_and_shareholding(code, fm_token=""):
     """
-    【v11.0 機構基本面與外本比/投本比引擎】
-    1. 抓取近 16 個月營收，計算最新月營收 YoY(%) 以及「近 3 個月平均 YoY」，判斷營收成長是在「加速」還是「高檔鈍化」！
-    2. 抓取 TaiwanStockShareholding 計算總發行股數，進而將外資與投信買賣超換算為真實「外本比(%)」與「投本比(%)」！
+    【v11.0 機構級基本面與外本比引擎】
+    1. 抓取最近 16 個月營收，計算「最新月營收年增率 (YoY%)」與「近3月平均 YoY%」，得出『成長加速度 (ΔYoY)』！
+    2. 抓取外資持股比率變化 (真正的外本比增減%)！
     """
-    res = {"rev_ok": False, "rev_month": "", "yoy_latest": 0.0, "yoy_prev": 0.0, "yoy_3m_avg": 0.0, "yoy_accel": 0.0, "total_shares_lots": 0}
+    res = {"has_rev": False, "rev_month": "-", "yoy_latest": 0.0, "yoy_3m_avg": 0.0, "yoy_accel": 0.0, "mom_latest": 0.0, "foreign_hold_pct": 0.0, "foreign_hold_chg_5d": 0.0}
     if str(code).startswith("00"): return res
     try:
-        start_dt = (pd.Timestamp.now() - pd.Timedelta(days=520)).strftime("%Y-%m-%d")
-        params = {"dataset": "TaiwanStockMonthRevenue", "data_id": code, "start_date": start_dt}
-        if fm_token: params["token"] = fm_token
-        r_rev = GLOBAL_HTTP_SESSION.get("https://api.finmindtrade.com/api/v4/data", params=params, timeout=6, verify=False)
+        start_rev = (pd.Timestamp.now() - pd.Timedelta(days=500)).strftime("%Y-%m-%d")
+        p_rev = {"dataset": "TaiwanStockMonthRevenue", "data_id": code, "start_date": start_rev}
+        if fm_token: p_rev["token"] = fm_token
+        r_rev = GLOBAL_HTTP_SESSION.get("https://api.finmindtrade.com/api/v4/data", params=p_rev, timeout=6, verify=False)
         if r_rev.status_code == 200 and r_rev.json().get("data"):
             df_r = pd.DataFrame(r_rev.json()["data"]).sort_values(["revenue_year", "revenue_month"])
-            rev_map = {(int(r["revenue_year"]), int(r["revenue_month"])): float(r["revenue"]) for _, r in df_r.iterrows()}
+            df_r["rev"] = df_r["revenue"].astype(float)
+            df_r["ym"] = df_r["revenue_year"].astype(str) + "-" + df_r["revenue_month"].astype(str).str.zfill(2)
+            rev_map = dict(zip(zip(df_r["revenue_year"].astype(int), df_r["revenue_month"].astype(int)), df_r["rev"]))
             yoy_list = []
-            for (y, m), rev_val in sorted(rev_map.items()):
-                prev_y_rev = rev_map.get((y - 1, m), 0.0)
-                if prev_y_rev > 0:
-                    yoy_pct = round(((rev_val - prev_y_rev) / prev_y_rev) * 100.0, 2)
-                    yoy_list.append((f"{y}/{m:02d}", yoy_pct))
+            for _, row in df_r.iterrows():
+                y, m, cur_v = int(row["revenue_year"]), int(row["revenue_month"]), float(row["rev"])
+                prev_y_v = rev_map.get((y - 1, m), 0.0)
+                if prev_y_v > 0:
+                    yoy_list.append((row["ym"], round(((cur_v - prev_y_v) / prev_y_v) * 100.0, 2), cur_v))
             if len(yoy_list) >= 3:
-                res["rev_ok"] = True
-                res["rev_month"] = yoy_list[-1][0]
-                res["yoy_latest"] = yoy_list[-1][1]
-                res["yoy_prev"] = yoy_list[-2][1]
-                prev_3 = [x[1] for x in yoy_list[-4:-1]] if len(yoy_list) >= 4 else [x[1] for x in yoy_list[:-1]]
-                res["yoy_3m_avg"] = round(sum(prev_3) / len(prev_3), 2)
-                res["yoy_accel"] = round(res["yoy_latest"] - res["yoy_3m_avg"], 2)
+                yoy_latest = yoy_list[-1][1]
+                yoy_3m_avg = round(sum(x[1] for x in yoy_list[-3:]) / 3.0, 2)
+                prev_m_v = yoy_list[-2][2]
+                mom_latest = round(((yoy_list[-1][2] - prev_m_v) / prev_m_v) * 100.0, 2) if prev_m_v > 0 else 0.0
+                res.update({"has_rev": True, "rev_month": yoy_list[-1][0], "yoy_latest": yoy_latest, "yoy_3m_avg": yoy_3m_avg, "yoy_accel": round(yoy_latest - yoy_3m_avg, 2), "mom_latest": mom_latest})
     except Exception: pass
 
     try:
-        start_sh = (pd.Timestamp.now() - pd.Timedelta(days=15)).strftime("%Y-%m-%d")
-        params_sh = {"dataset": "TaiwanStockShareholding", "data_id": code, "start_date": start_sh}
-        if fm_token: params_sh["token"] = fm_token
-        r_sh = GLOBAL_HTTP_SESSION.get("https://api.finmindtrade.com/api/v4/data", params=params_sh, timeout=5, verify=False)
+        start_sh = (pd.Timestamp.now() - pd.Timedelta(days=20)).strftime("%Y-%m-%d")
+        p_sh = {"dataset": "TaiwanStockShareholding", "data_id": code, "start_date": start_sh}
+        if fm_token: p_sh["token"] = fm_token
+        r_sh = GLOBAL_HTTP_SESSION.get("https://api.finmindtrade.com/api/v4/data", params=p_sh, timeout=5, verify=False)
         if r_sh.status_code == 200 and r_sh.json().get("data"):
-            df_sh = pd.DataFrame(r_sh.json()["data"]).sort_values("date")
-            shares = float(df_sh.iloc[-1].get("NumberOfSharesIssued", 0))
-            if shares > 0:
-                res["total_shares_lots"] = int(shares / 1000.0)
+            df_s = pd.DataFrame(r_sh.json()["data"]).sort_values("date")
+            if len(df_s) >= 2:
+                latest_r = float(df_s["ForeignInvestmentSharesRatio"].iloc[-1])
+                prev5_r = float(df_s["ForeignInvestmentSharesRatio"].iloc[max(0, len(df_s)-6)])
+                res.update({"foreign_hold_pct": round(latest_r, 2), "foreign_hold_chg_5d": round(latest_r - prev5_r, 2)})
     except Exception: pass
     return res
 
 @st.cache_data(ttl=3600)
 def fetch_chip_data_20d(code, fm_token=""):
-    empty_periods = {w: {"f": 0, "t": 0, "d": 0, "tot": 0} for w in [1, 3, 5, 10, 20]}
+    empty_p = {w: {"f": 0, "t": 0, "d": 0, "tot": 0} for w in [1, 3, 5, 10, 20]}
     try:
         params = {"dataset": "TaiwanStockInstitutionalInvestorsBuySell", "data_id": code, "start_date": (pd.Timestamp.now() - pd.Timedelta(days=50)).strftime("%Y-%m-%d")}
         if fm_token: params["token"] = fm_token
-        resp = GLOBAL_HTTP_SESSION.get("https://api.finmindtrade.com/api/v4/data", params=params, timeout=8, verify=False)
+        resp = GLOBAL_HTTP_SESSION.get("https://api.finmindtrade.com/api/v4/data", params=params, timeout=7, verify=False)
         if resp.status_code == 200 and resp.json().get("data"):
             df_c = pd.DataFrame(resp.json()["data"])
-            last_20_dates = sorted(df_c["date"].unique())[-20:]
-            df_20 = df_c[df_c["date"].isin(last_20_dates)].copy()
+            dates = sorted(df_c["date"].unique())[-20:]
+            df_20 = df_c[df_c["date"].isin(dates)].copy()
             df_20["net_lots"] = (df_20["buy"].astype(float) - df_20["sell"].astype(float)) / 1000.0
-            daily_rows = []
-            for dt_str in sorted(last_20_dates, reverse=True):
-                sub_d = df_20[df_20["date"] == dt_str]
-                f_d = int(round(sub_d[sub_d["name"].str.contains("Foreign", case=False, na=False)]["net_lots"].sum()))
-                t_d = int(round(sub_d[sub_d["name"].str.contains("Investment_Trust", case=False, na=False)]["net_lots"].sum()))
-                d_d = int(round(sub_d[sub_d["name"].str.contains("Dealer", case=False, na=False)]["net_lots"].sum()))
-                daily_rows.append({"交易日期": dt_str, "外資買賣超(張)": f_d, "投信買賣超(張)": t_d, "自營商買賣超(張)": d_d, "三大法人合計(張)": f_d + t_d + d_d})
-            periods = {w: {"f": sum(r["外資買賣超(張)"] for r in daily_rows[:w]), "t": sum(r["投信買賣超(張)"] for r in daily_rows[:w]), "d": sum(r["自營商買賣超(張)"] for r in daily_rows[:w]), "tot": sum(r["三大法人合計(張)"] for r in daily_rows[:w])} for w in [1, 3, 5, 10, 20]}
-            return {
-                "ok": True, "periods": periods,
-                "foreign_5d": periods[5]["f"], "trust_5d": periods[5]["t"], "dealer_5d": periods[5]["d"], "total_5d": periods[5]["tot"],
-                "foreign_10d": periods[10]["f"], "trust_10d": periods[10]["t"], "dealer_10d": periods[10]["d"], "total_10d": periods[10]["tot"],
-                "daily_table": daily_rows
-            }
+            rows = []
+            for dt_s in sorted(dates, reverse=True):
+                sub = df_20[df_20["date"] == dt_s]
+                f_d = int(round(sub[sub["name"].str.contains("Foreign", case=False, na=False)]["net_lots"].sum()))
+                t_d = int(round(sub[sub["name"].str.contains("Investment_Trust", case=False, na=False)]["net_lots"].sum()))
+                d_d = int(round(sub[sub["name"].str.contains("Dealer", case=False, na=False)]["net_lots"].sum()))
+                rows.append({"交易日期": dt_s, "外資買賣超(張)": f_d, "投信買賣超(張)": t_d, "自營商買賣超(張)": d_d, "三大法人合計(張)": f_d + t_d + d_d})
+            periods = {w: {"f": sum(r["外資買賣超(張)"] for r in rows[:w]), "t": sum(r["投信買賣超(張)"] for r in rows[:w]), "d": sum(r["自營商買賣超(張)"] for r in rows[:w]), "tot": sum(r["三大法人合計(張)"] for r in rows[:w])} for w in [1, 3, 5, 10, 20]}
+            return {"ok": True, "periods": periods, "foreign_5d": periods[5]["f"], "trust_5d": periods[5]["t"], "dealer_5d": periods[5]["d"], "total_5d": periods[5]["tot"], "foreign_10d": periods[10]["f"], "trust_10d": periods[10]["t"], "dealer_10d": periods[10]["d"], "total_10d": periods[10]["tot"], "daily_table": rows}
     except Exception: pass
-    return {"ok": False, "periods": empty_periods, "foreign_5d": 0, "trust_5d": 0, "dealer_5d": 0, "total_5d": 0, "foreign_10d": 0, "trust_10d": 0, "dealer_10d": 0, "total_10d": 0, "daily_table": []}
+    return {"ok": False, "periods": empty_p, "foreign_5d": 0, "trust_5d": 0, "dealer_5d": 0, "total_5d": 0, "foreign_10d": 0, "trust_10d": 0, "dealer_10d": 0, "total_10d": 0, "daily_table": []}
 
 @st.cache_data(ttl=3600)
 def fetch_margin_short_20d(code, fm_token=""):
-    empty_m_periods = {w: {"m_chg": 0, "s_chg": 0} for w in [1, 3, 5, 10, 20]}
+    empty_m = {w: {"m_chg": 0, "s_chg": 0} for w in [1, 3, 5, 10, 20]}
     try:
         params = {"dataset": "TaiwanStockMarginPurchaseShortSale", "data_id": code, "start_date": (pd.Timestamp.now() - pd.Timedelta(days=50)).strftime("%Y-%m-%d")}
         if fm_token: params["token"] = fm_token
-        resp = GLOBAL_HTTP_SESSION.get("https://api.finmindtrade.com/api/v4/data", params=params, timeout=8, verify=False)
+        resp = GLOBAL_HTTP_SESSION.get("https://api.finmindtrade.com/api/v4/data", params=params, timeout=7, verify=False)
         if resp.status_code == 200 and resp.json().get("data"):
             df_20 = pd.DataFrame(resp.json()["data"]).sort_values("date").tail(20).copy()
-            daily_rows = []
+            rows = []
             for _, r in df_20.iloc[::-1].iterrows():
-                m_bal, m_prev, m_limit = int(float(r.get("MarginPurchaseTodayBalance", 0))), int(float(r.get("MarginPurchaseYesterdayBalance", 0))), int(float(r.get("MarginPurchaseLimit", 0)))
-                s_bal, s_prev = int(float(r.get("ShortSaleTodayBalance", 0))), int(float(r.get("ShortSaleYesterdayBalance", 0)))
-                daily_rows.append({
-                    "交易日期": str(r["date"]), "融資餘額(張)": m_bal, "融資增減(張)": m_bal - m_prev,
-                    "融資使用率(%)": round((m_bal / m_limit) * 100, 2) if m_limit > 0 else 0.0,
-                    "融券餘額(張)": s_bal, "融券增減(張)": s_bal - s_prev,
-                    "券資比(%)": round((s_bal / m_bal) * 100, 2) if m_bal > 0 else 0.0, "_limit": m_limit
-                })
-            if daily_rows:
-                latest = daily_rows[0]
-                m_periods = {w: {"m_chg": sum(x["融資增減(張)"] for x in daily_rows[:w]), "s_chg": sum(x["融券增減(張)"] for x in daily_rows[:w])} for w in [1, 3, 5, 10, 20]}
-                return {
-                    "ok": True, "eligible": (latest["_limit"] > 0) or (latest["融資餘額(張)"] > 0), "periods": m_periods,
-                    "margin_bal": latest["融資餘額(張)"], "margin_chg": latest["融資增減(張)"], "margin_util": latest["融資使用率(%)"],
-                    "short_bal": latest["融券餘額(張)"], "short_chg": latest["融券增減(張)"], "short_margin_ratio": latest["券資比(%)"],
-                    "daily_table": [{k: v for k, v in item.items() if k != "_limit"} for item in daily_rows]
-                }
+                mb, mp, ml = int(float(r.get("MarginPurchaseTodayBalance", 0))), int(float(r.get("MarginPurchaseYesterdayBalance", 0))), int(float(r.get("MarginPurchaseLimit", 0)))
+                sb, sp = int(float(r.get("ShortSaleTodayBalance", 0))), int(float(r.get("ShortSaleYesterdayBalance", 0)))
+                rows.append({"交易日期": str(r["date"]), "融資餘額(張)": mb, "融資增減(張)": mb - mp, "融資使用率(%)": round((mb / ml) * 100, 2) if ml > 0 else 0.0, "融券餘額(張)": sb, "融券增減(張)": sb - sp, "券資比(%)": round((sb / mb) * 100, 2) if mb > 0 else 0.0, "_limit": ml})
+            if rows:
+                lt = rows[0]
+                m_p = {w: {"m_chg": sum(x["融資增減(張)"] for x in rows[:w]), "s_chg": sum(x["融券增減(張)"] for x in rows[:w])} for w in [1, 3, 5, 10, 20]}
+                return {"ok": True, "eligible": (lt["_limit"] > 0) or (lt["融資餘額(張)"] > 0), "periods": m_p, "margin_bal": lt["融資餘額(張)"], "margin_chg": lt["融資增減(張)"], "margin_util": lt["融資使用率(%)"], "short_bal": lt["融券餘額(張)"], "short_chg": lt["融券增減(張)"], "short_margin_ratio": lt["券資比(%)"], "daily_table": [{k: v for k, v in it.items() if k != "_limit"} for it in rows]}
     except Exception: pass
-    return {"ok": False, "eligible": False, "periods": empty_m_periods, "margin_bal": 0, "margin_chg": 0, "margin_util": 0.0, "short_bal": 0, "short_chg": 0, "short_margin_ratio": 0.0, "daily_table": []}
+    return {"ok": False, "eligible": False, "periods": empty_m, "margin_bal": 0, "margin_chg": 0, "margin_util": 0.0, "short_bal": 0, "short_chg": 0, "short_margin_ratio": 0.0, "daily_table": []}
 
 # ==========================================
-# 4. 全市場 1800+ 檔官方產業分類快取與活水族群掃描引擎
+# 4. 三週期共振、個股 4 維度評分 & 大盤 5 維度評分引擎
+# ==========================================
+def evaluate_mtf_resonance(tech_1d, tech_60m, tech_5m, cdp_vals, bull_c="#FF6B6B", bear_c="#2ECC71", warn_c="#F1C40F"):
+    cdp_p, nh_p, nl_p = cdp_vals["CDP"], cdp_vals["NH"], cdp_vals["NL"]
+    def _parse(t_obj, label, is_5m=False):
+        if not t_obj or not t_obj.get("ok"):
+            return {"週期": label, "趨勢與扣抵": "載入中", "布林通道位階": "-", "神奇九轉(TD9)": "-", "KD / RSI 動能": "-", "bias": 0, "td_b": 0, "td_s": 0}
+        c, m20, ded, bbu, bbl, tb, ts, kv, dv, rv = t_obj["close"], t_obj["ma20"], t_obj["deduct"], t_obj["bb_upper"], t_obj["bb_lower"], t_obj["td_buy"], t_obj["td_sell"], t_obj["K"], t_obj["D"], t_obj["rsi"]
+        if is_5m:
+            t_str, bias = (f"🔴 站上20MA({m20}) & CDP({cdp_p})", 1) if (c >= m20 and c >= cdp_p) else ((f"🟢 跌破20MA({m20}) & CDP({cdp_p})", -1) if (c < m20 and c < cdp_p) else (f"⚖️ 20MA 與 CDP 間交戰", 0))
+        else:
+            t_str, bias = (f"🔴 站上20MA({m20})＋扣抵({ded})助漲", 1) if (c >= m20 and c >= ded) else ((f"🟢 跌破20MA({m20})＋扣抵({ded})反壓", -1) if (c < m20 and c < ded) else (f"🟡 站上20MA (扣抵{ded})" if c >= m20 else f"🟡 低於20MA (扣抵{ded})", 1 if c >= m20 else -1))
+        bb_s = f"🔥 突破上軌({bbu})鈍化" if c >= bbu else (f"🌱 觸及下軌({bbl})超跌" if c <= bbl else (f"📈 中軌至上軌偏強" if c >= m20 else f"📉 中軌至下軌整理"))
+        td_s = f"🔥 ▲低{tb} (轉折訊號)" if tb >= 8 else (f"▲ 低九第 {tb} 根" if tb > 0 else (f"⚠️ ▼高{ts} (衰竭警戒)" if ts >= 8 else (f"▼ 高九第 {ts} 根" if ts > 0 else "⚪ 無連續計數")))
+        return {"週期": label, "趨勢與扣抵": t_str, "布林通道位階": bb_s, "神奇九轉(TD9)": td_s, "KD / RSI 動能": f"{'🔴金叉' if kv>=dv else '🟢死叉'} K({kv})/D({dv})｜RSI {rv}", "bias": bias, "td_b": tb, "td_s": ts}
+
+    r1, r60, r5 = _parse(tech_1d, "📅 日 K (波段大方向)"), _parse(tech_60m, "⏱️ 60分K (隔日/波段)"), _parse(tech_5m, "⚡ 5分K (當沖扳機)", True)
+    b1, b60, b5 = r1["bias"], r60["bias"], r5["bias"]
+    low_tds = [n for n, r in [("日K", r1), ("60分K", r60), ("5分K", r5)] if r["td_b"] >= 7]
+    if b1 > 0 and b60 > 0 and b5 > 0:
+        t, clr, d = "🔥 【三週期多方強勢共振】日K ＋ 60分K ＋ 5分K 同步站上均線與 CDP 分水嶺！", bull_c, f"大中小三週期趨勢一致偏多！盤中守穩 **CDP（{cdp_p}元）** 或 **5分K 20MA（{tech_5m.get('ma20', cdp_p)}元）** 順勢偏多勝率最高。"
+    elif b1 > 0 and b60 > 0 and b5 <= 0:
+        t, clr, d = "🎯 【長多短回洗盤格局】日K 與 60分K 波段偏多，5分K 盤中拉回測試支撐！", warn_c, f"波段均線維持多頭保護，僅 5分K 拉回洗盤。可留意 **5分K ▲低8/低9** 或觸及 **NL支撐（{nl_p}元）** 後重新站回均線之切入契機！"
+    elif b1 < 0 and b60 < 0 and b5 < 0:
+        if len(low_tds) >= 2: t, clr, d = f"🌱 【空方宣洩末端 × 多週期低九共振】({'＋'.join(low_tds)} 同步進入低九轉折區！)", warn_c, f"雖均線偏空，但 **{'與'.join(low_tds)}** 已同步出現連續下跌第 7~9 根衰竭訊號，空單宜於 **NL（{nl_p}元）** 附近停利，勿盲目追空！"
+        else: t, clr, d = "❄️ 【三週期空方壓制共振】日K ＋ 60分K ＋ 5分K 同步受制於均線與 CDP 反壓！", bear_c, f"三週期同步處於空頭壓制，反彈至 **CDP（{cdp_p}元）** 或 **NH壓力（{nh_p}元）** 受阻宜偏空避險或觀望。"
+    else:
+        t, clr, d = "⚖️ 【多空週期交錯震盪】各週期方向分歧，宜依 CDP 支撐壓力與九轉訊號區間操作", warn_c, f"建議以 **CDP（{cdp_p}元）** 為分水嶺，靠近 **NL（{nl_p}元）＋低九** 找支撐、靠近 **NH（{nh_p}元）＋高九** 留意調節。"
+    return {"title": t, "color": clr, "desc": d, "table": [{k: r[k] for k in ["週期", "趨勢與扣抵", "布林通道位階", "神奇九轉(TD9)", "KD / RSI 動能"]} for r in (r1, r60, r5)]}
+
+def evaluate_three_pillars(tech, chip, bull_c="#FF6B6B", bear_c="#2ECC71", warn_c="#F1C40F", tech_60m=None, tech_5m=None, margin_info=None, fund_info=None, taiex_info=None):
+    """
+    【v11.0 機構級個股 4 大維度 100 分制動態評分】
+    1. 相對大盤強弱 (Alpha) & 日K均線位階 (25分)
+    2. 三週期共振 (60分K/5分K) & 動能指標 (25分)
+    3. 投本比/外本比 (買賣超佔成交量控盤度% + 外資持股比變化) & 資券結構 (30分)
+    4. 月營收年增率加速度 (ΔYoY) & 高檔利多出盡防禦檢驗 (20分)
+    """
+    c, ma5, ma20, ma60, ded = tech["close"], tech["ma5"], tech["ma20"], tech["ma60"], tech["deduct"]
+    kv, dv, macd_osc, rsi = tech["K"], tech["D"], tech["macd_osc"], tech["rsi"]
+    chg_1d, chg_5d = tech.get("chg_1d_pct", 0.0), tech.get("chg_5d_pct", 0.0)
+    vol_5d_lots = max(1.0, tech.get("vol_5d_lots", 5000.0))
+
+    # 計算對抗大盤 Alpha 值
+    mkt_1d_pct = round((taiex_info["chg"] / max(1.0, taiex_info["close"] - taiex_info["chg"])) * 100.0, 2) if (taiex_info and taiex_info.get("ok")) else 0.0
+    mkt_5d_pct = taiex_info.get("chg_5d_pct", 0.0) if (taiex_info and taiex_info.get("ok")) else 0.0
+    alpha_1d, alpha_5d = round(chg_1d - mkt_1d_pct, 2), round(chg_5d - mkt_5d_pct, 2)
+
+    breakdown = []
+
+    # 維度 1：相對大盤 Alpha 與日K趨勢 (25分)
+    s_alpha = max(0, min(10, int(round(5.0 + alpha_1d * 1.2 + alpha_5d * 0.5))))
+    s_ma = (4 if c >= ma5 else 0) + (6 if c >= ma20 else 0) + (2 if c >= ma60 else 0) + (3 if c >= ded else 0)
+    d1_score = s_alpha + s_ma
+    breakdown.append(("🛡️ 1. 相對大盤強弱(Alpha) & 日K均線", f"{d1_score} / 25 分", f"對抗大盤 Alpha：單日{alpha_1d:+.2f}% / 5日{alpha_5d:+.2f}% (+{s_alpha}分)｜均線5/20/60MA與扣抵 (+{s_ma}分)"))
+
+    # 維度 2：60分K/5分K 三週期共振 & 動能指標 (25分)
+    s_60m = ((5 if tech_60m["close"] >= tech_60m["ma20"] else 0) + (3 if tech_60m["K"] >= tech_60m["D"] else 0)) if (tech_60m and tech_60m.get("ok")) else 4
+    s_5m = ((4 if tech_5m["close"] >= tech_5m["ma20"] else 0) + (3 if tech_5m["K"] >= tech_5m["D"] else 0)) if (tech_5m and tech_5m.get("ok")) else 3
+    s_ind = (4 if kv >= dv else (1 if kv < 20 else 0)) + (3 if macd_osc >= 0 else 0) + (3 if 50 <= rsi <= 78 else (1 if rsi > 78 else 0))
+    d2_score = s_60m + s_5m + s_ind
+    breakdown.append(("⚡ 2. 三週期(60分/5分K)共振 & 動能", f"{d2_score} / 25 分", f"60分K位階 (+{s_60m}分)｜5分K位階 (+{s_5m}分)｜日KD/MACD/RSI (+{s_ind}分)"))
+
+    # 維度 3：投本比/外本比 (主力成交量佔比%) & 資券結構 (30分)
+    p_c = chip["periods"]
+    tot_1d, tot_3d, tot_5d, t_5d, f_5d = p_c[1]["tot"], p_c[3]["tot"], p_c[5]["tot"], p_c[5]["t"], p_c[5]["f"]
+    inst_vol_ratio = round((tot_5d / vol_5d_lots) * 100.0, 2)  # 法人近5日買賣超佔成交量比重 (%)
+    trust_vol_ratio = round((t_5d / vol_5d_lots) * 100.0, 2)   # 投信控盤度 (%)
+    f_hold_chg = fund_info.get("foreign_hold_chg_5d", 0.0) if fund_info else 0.0
+
+    # 控盤含金量 (0~12分) + 近期1/3日加速度 (0~10分) + 資券乾淨度 (0~8分)
+    s_conc = max(0, min(12, int(round(6.0 + inst_vol_ratio * 0.35 + (3.0 if trust_vol_ratio >= 3.0 else (1.5 if t_5d > 0 else 0.0)) + (2.0 if f_hold_chg > 0.2 else 0.0)))))
+    s_accel = (5 if tot_1d > 0 else (2 if tot_1d == 0 else 0)) + (5 if tot_3d > 0 else (2 if tot_3d == 0 else 0))
+    m_chg_5d = margin_info["periods"][5]["m_chg"] if (margin_info and margin_info.get("ok")) else 0
+    sm_ratio = margin_info.get("short_margin_ratio", 0.0) if margin_info else 0.0
+    if tot_5d > 0 and m_chg_5d <= 0: s_mg = 8  # 法人買+融資減 (黃金籌碼)
+    elif tot_5d > 0 and m_chg_5d > 0: s_mg = 6 if sm_ratio >= 15 else 5
+    elif tot_5d <= 0 and m_chg_5d < 0: s_mg = 4
+    else: s_mg = 1  # 法人賣+融資增 (散戶接刀)
+    d3_score = s_conc + s_accel + s_mg
+    breakdown.append(("💰 3. 外本比/投本比濃度 & 資券結構", f"{d3_score} / 30 分", f"5日法人佔成交量 {inst_vol_ratio:+.1f}% / 外資持股比增減 {f_hold_chg:+.2f}% (+{s_conc}分)｜近1/3日點火 (+{s_accel}分)｜5日融資{m_chg_5d:+,}張 (+{s_mg}分)"))
+
+    # 維度 4：月營收年增率加速度 (ΔYoY) & 高檔利多出盡檢驗 (20分)
+    if fund_info and fund_info.get("has_rev"):
+        yoy, yoy_avg, accel = fund_info["yoy_latest"], fund_info["yoy_3m_avg"], fund_info["yoy_accel"]
+        s_yoy = 8 if yoy >= 25 else (6 if yoy >= 10 else (4 if yoy > 0 else (2 if yoy > -10 else 0)))
+        s_acc = 7 if accel >= 5.0 else (5 if accel >= 0 else (2 if accel > -10 else 0))
+        # 【利多出盡防禦檢驗】：若營收 YoY > 20% 看似很好，但股價卻跌破月線且近 5 日法人賣超 -> 判定為高檔利多鈍化/預期見頂，扣分警告！
+        if yoy >= 15 and c < ma20 and tot_5d < 0:
+            s_react = 0
+            rev_note = f"⚠️ {fund_info['rev_month']}營收YoY {yoy:+.1f}%雖高，惟股價破月線+法人賣超 (嚴防高檔利多出盡！+0分)"
+            s_acc = max(0, s_acc - 3)
+        elif yoy > 0 and c >= ma20:
+            s_react = 5
+            rev_note = f"✅ {fund_info['rev_month']}營收YoY {yoy:+.1f}% (較3月均{yoy_avg:+.1f}% {'加速' if accel>=0 else '降速'}{accel:+.1f}%)＋站穩月線 (+5分)"
+        else:
+            s_react = 2
+            rev_note = f"{fund_info['rev_month']}營收YoY {yoy:+.1f}%｜加速度 {accel:+.1f}%"
+        d4_score = s_yoy + s_acc + s_react
+        breakdown.append(("🚀 4. 營收YoY加速度 & 利多出盡檢驗", f"{d4_score} / 20 分", rev_note))
+    else:
+        # ETF 或無營收資料時，按前 3 項得分比例換算滿分 20 分
+        d4_score = int(round(((d1_score + d2_score + d3_score) / 80.0) * 20.0))
+        breakdown.append(("🚀 4. 波動穩定度與規模權重 (ETF適用)", f"{d4_score} / 20 分", "本標的無月營收欄位，依技術與籌碼共振比例動態換算"))
+
+    total = max(0, min(100, d1_score + d2_score + d3_score + d4_score))
+
+    if total >= 75:
+        verdict, v_color, v_desc = "🔥 機構級多方強勢共振（跑贏大盤 Alpha ＋ 三週期偏多 ＋ 法人高濃度控盤）", bull_c, f"白話結論：近期走勢明顯強於大盤（單日Alpha {alpha_1d:+.2f}%），且法人近5日買超佔成交量達 {inst_vol_ratio:+.1f}%，技術與籌碼高度集中。"
+    elif total >= 55:
+        verdict, v_color, v_desc = "📈 偏多順風結構（均線保護完整，留意分K拉回支撐切入點）", bull_c, f"白話結論：整體架構維持偏多，惟短線切勿追高乖離，可搭配下方 60分K/5分K 共振表等待拉回中軌或 CDP 支撐。"
+    elif total >= 40:
+        verdict, v_color, v_desc = "⚖️ 多空交戰拉鋸（技術與籌碼訊號分歧，宜區間靈活操作）", warn_c, f"白話結論：目前多空力量拉鋸（單日Alpha {alpha_1d:+.2f}%），若營收高檔但股價滯漲需防利多鈍化，適合依 CDP 高出低進。"
+    elif total >= 25:
+        verdict, v_color, v_desc = "⚠️ 短線轉弱警戒（均線反壓或法人調節，反彈宜減碼避險）", bear_c, f"白話結論：短線動能轉弱且受制於均線反壓，法人近5日佔成交量比重為 {inst_vol_ratio:+.1f}%，搶反彈務必嚴設停損。"
+    else:
+        verdict, v_color, v_desc = "❄️ 極度弱勢修正（三週期破線 ＋ 法人提款散戶接刀，切勿盲目摸底）", bear_c, f"白話結論：趨勢、分K動能與法人籌碼同步偏空，在 60分K/5分K 尚未出現明確低九止跌並站回均線前，宜保守觀望或偏空避險。"
+
+    return {"total": total, "t_score": d1_score, "m_score": d2_score, "c_score": d3_score, "f_score": d4_score, "alpha_1d": alpha_1d, "alpha_5d": alpha_5d, "inst_vol_ratio": inst_vol_ratio, "verdict": verdict, "v_color": v_color, "v_desc": v_desc, "breakdown": breakdown}
+
+@st.cache_data(ttl=900)
+def fetch_macro_fx_and_sox(taiex_hist_df=None):
+    """
+    【v11.0 總經活水引擎】抓取新台幣匯率 (TWD=X) 與美股費城半導體 (^SOX)，並計算與台股近 20 日滾動相關係數 (r)！
+    """
+    res = {"fx_rate": 32.15, "fx_chg_5d": 0.0, "fx_ma20": 32.15, "sox_close": 5000.0, "sox_chg_1d_pct": 0.0, "sox_ma20": 5000.0, "sox_corr_20d": 0.65}
+    try:
+        df_fx, _ = fetch_kline_df_bypass_ssl("TWD=X", range_str="2mo")
+        if not df_fx.empty and len(df_fx) >= 6:
+            fx_c = round(float(df_fx["Close"].iloc[-1]), 3)
+            fx_p5 = float(df_fx["Close"].iloc[-6])
+            res.update({"fx_rate": fx_c, "fx_chg_5d": round(fx_c - fx_p5, 3), "fx_ma20": round(float(df_fx["Close"].tail(20).mean()), 3)})
+    except Exception: pass
+    try:
+        df_sox, _ = fetch_kline_df_bypass_ssl("^SOX", range_str="3mo")
+        if not df_sox.empty and len(df_sox) >= 20:
+            sc, sp1 = round(float(df_sox["Close"].iloc[-1]), 1), float(df_sox["Close"].iloc[-2])
+            res.update({"sox_close": sc, "sox_chg_1d_pct": round(((sc - sp1) / sp1) * 100.0, 2) if sp1 > 0 else 0.0, "sox_ma20": round(float(df_sox["Close"].tail(20).mean()), 1)})
+            if taiex_hist_df is not None and len(taiex_hist_df) >= 25:
+                s_ret = df_sox["Close"].pct_change().tail(25).reset_index(drop=True)
+                t_ret = taiex_hist_df["Close"].pct_change().tail(25).reset_index(drop=True)
+                min_l = min(len(s_ret), len(t_ret))
+                if min_l >= 15:
+                    corr_v = s_ret.tail(min_l).corr(t_ret.tail(min_l))
+                    if pd.notna(corr_v): res["sox_corr_20d"] = round(float(corr_v), 2)
+    except Exception: pass
+    return res
+
+def evaluate_taiex_market_score(taiex, cfg, breadth_fg, macro_info=None, bull_c="#FF6B6B", bear_c="#2ECC71", warn_c="#F1C40F"):
+    """
+    【v11.0 大盤 5 大維度 100 分制動態評分 (含新台幣匯率活水 + 費半 20 日相關係數動態權重)】
+    """
+    c, ma5, ma20, ma60, ded = taiex["close"], taiex["ma5"], taiex["ma20"], taiex["ma60"], taiex["deduct"]
+    chg, bias20, kv, dv = taiex["chg"], taiex["bias20"], taiex["K"], taiex["D"]
+    chg_pct = round((chg / max(1.0, c - chg)) * 100.0, 2)
+    sp_f, sp_t, sp_d = float(cfg.get("mkt_spot_foreign", 0.0)), float(cfg.get("mkt_spot_trust", 0.0)), float(cfg.get("mkt_spot_dealer", 0.0))
+    sp_tot = round(sp_f + sp_t + sp_d, 2)
+    foi, foi_chg, m_chg = int(cfg.get("mkt_foreign_oi", -30000)), int(cfg.get("mkt_foreign_oi_chg", 0)), float(cfg.get("mkt_margin_chg", 0.0))
+    up_ratio, fg_score = float(breadth_fg.get("up_ratio", 50.0)), int(breadth_fg.get("fg_score", 50))
+    macro = macro_info or {"fx_rate": 32.15, "fx_chg_5d": 0.0, "fx_ma20": 32.15, "sox_close": 5000.0, "sox_chg_1d_pct": 0.0, "sox_ma20": 5000.0, "sox_corr_20d": 0.65}
+
+    breakdown = []
+
+    # 1. 台幣匯率活水 & 費半動態相關性 (15分)
+    # TWD=X 數值下跌代表「新台幣升值(資金流入)」，數值上漲代表「新台幣貶值(資金外流)」
+    fx_c, fx_chg5, fx_m20 = macro["fx_rate"], macro["fx_chg_5d"], macro["fx_ma20"]
+    s_fx = (5 if fx_chg5 <= 0 else (2 if fx_chg5 < 0.15 else 0)) + (3 if fx_c <= fx_m20 else 0)
+    corr_r, sox_c, sox_m20, sox_chg = macro["sox_corr_20d"], macro["sox_close"], macro["sox_ma20"], macro["sox_chg_1d_pct"]
+    raw_sox_score = (4 if sox_c >= sox_m20 else 0) + max(0, min(3, int(round(sox_chg + 1.5))))
+    if corr_r >= 0.55:
+        s_sox = raw_sox_score
+        sox_note = f"費半 {sox_chg:+.2f}% (20日高相關 r={corr_r} ➔ 全權重 +{s_sox}分)"
+    elif corr_r >= 0.25:
+        s_sox = int(round(raw_sox_score * 0.5 + (3.5 if c >= ma5 else 1.0) * 0.5))
+        sox_note = f"費半 {sox_chg:+.2f}% (中度相關 r={corr_r} ➔ 折半權重 +{s_sox}分)"
+    else:
+        s_sox = 7 if c >= ma20 else (4 if c >= ma5 else 1)
+        sox_note = f"⚠️ 近期與費半脫鉤 (r={corr_r})，自動改依台股自身內資位階計分 (+{s_sox}分)"
+    macro_score = s_fx + s_sox
+    breakdown.append(("🌎 1. 新台幣匯率活水 & 費半相關性 (滿分15)", f"{macro_score} / 15 分", f"台幣匯率 {fx_c} ({'升值熱錢流入' if fx_chg5<=0 else '貶值外流'} 5日{fx_chg5:+.2f}元 ➔ +{s_fx}分)｜{sox_note}"))
+
+    # 2. 均線與扣抵位階 (25分)
+    s_ma = (5 if c >= ma5 else 0) + (8 if c >= ma20 else 0) + (4 if c >= ma60 else 0) + (3 if c >= ded else 0)
+    s_bias = max(0, min(5, int(round((bias20 + 6.0) / 1.8))))
+    t_score = s_ma + s_bias
+    breakdown.append(("📈 2. 大盤均線與乖離位階 (滿分25)", f"{t_score} / 25 分", f"5/20/60MA與扣抵 (+{s_ma}分)｜月線乖離率 {bias20:+.2f}% (+{s_bias}分)"))
+
+    # 3. 單日漲跌與轉折動能 (15分)
+    s_chg = max(0, min(9, int(round((chg_pct + 2.5) * 2.0))))
+    s_kd = 3 if kv >= dv else (1 if kv < 20 else 0)
+    s_bb = 3 if c >= taiex["bb_lower"] else (2 if taiex.get("has_long_shadow") else 0)
+    m_score = s_chg + s_kd + s_bb
+    breakdown.append(("⚡ 3. 單日漲跌幅與K棒動能 (滿分15)", f"{m_score} / 15 分", f"單日 {chg:+.1f}點 ({chg_pct:+.2f}% ➔ +{s_chg}分)｜KD (+{s_kd}分)｜布林與下影線 (+{s_bb}分)"))
+
+    # 4. 三大法人期現貨 & 資券 (30分)
+    s_sp_tot = max(0, min(12, int(round((sp_tot + 600.0) / 80.0))))
+    s_sp_f = max(0, min(4, int(round((sp_f + 300.0) / 120.0))))
+    s_sp_t = 2 if sp_t > 0 else 0
+    s_foi = max(0, min(4, int(round((foi + 45000) / 9000.0)))) + (3 if foi_chg >= 1500 else (2 if foi_chg > 0 else (1 if foi_chg > -1500 else 0)))
+    s_mg = (5 if -30 <= m_chg <= 50 else 3) if chg >= 0 else (4 if m_chg <= -50 else (3 if m_chg < 0 else 1))
+    c_score = s_sp_tot + s_sp_f + s_sp_t + s_foi + s_mg
+    breakdown.append(("🏛️ 4. 法人期現貨百億級距 & 資券 (滿分30)", f"{c_score} / 30 分", f"現貨合計 {sp_tot:+.1f}億 (+{s_sp_tot+s_sp_f+s_sp_t}分)｜外資期貨 {foi:,}口/單日{foi_chg:+,} (+{s_foi}分)｜融資 {m_chg:+.1f}億 (+{s_mg}分)"))
+
+    # 5. 騰落廣度與情緒 (15分)
+    s_br = max(0, min(10, int(round(up_ratio / 10.0))))
+    s_fg = max(0, min(5, int(round(fg_score / 20.0))))
+    b_score = s_br + s_fg
+    breakdown.append(("🌡️ 5. 上市櫃騰落廣度 & 恐慌情緒 (滿分15)", f"{b_score} / 15 分", f"上漲家數佔比 {up_ratio}% (+{s_br}分)｜CNN情緒 {fg_score} (+{s_fg}分)"))
+
+    total = max(0, min(100, macro_score + t_score + m_score + c_score + b_score))
+    if total >= 75: light, clr, ct, cb = "🟢 綠燈｜多頭強勢順風（匯率熱錢流入＋均線助漲＋法人推升）", bull_c, "🔥 大盤處於多方強勢順風區！想掌握今日領漲主流股的切入位階嗎？", "💬 點此私訊您的專屬營業員：索取【今日主流強勢股深度籌碼清單】"
+    elif total >= 55: light, clr, ct, cb = "🟢 偏多綠黃燈｜多方控盤輪動（守穩支撐，主流族群輪動表現）", bull_c, "📈 大盤維持偏多輪動格局！想檢視手中持股是否在主流資金軌道上嗎？", "💬 點此私訊您的專屬營業員：預約【持股強弱診斷與主流換股討論】"
+    elif total >= 40: light, clr, ct, cb = "🟡 黃燈｜多空交戰拉鋸（均線與籌碼分歧，宜選股不選市）", warn_c, "🛡️ 大盤處於多空交戰拉鋸區！想了解如何利用短線當沖或期貨避險靈活應對嗎？", "💬 點此私訊您的專屬營業員：預約【1對1 持股健檢 & 短線操作策略討論】"
+    elif total >= 25: light, clr, ct, cb = "🟠 橘紅燈｜空方修正警戒（跌破月線＋資金調節，留意反壓與避險）", bear_c, "⚠️ 大盤處於空方修正階段！想討論如何運用個股期貨避險或保留現金部位嗎？", "💬 點此私訊您的專屬營業員：索取【空方避險策略與弱勢股汰弱留強建議】"
+    else: light, clr, ct, cb = "🚨 紅燈｜空方極度宣洩／超跌警戒（負乖離過大＋融資清洗，緊盯止跌轉折）", bear_c, "🚨 盤勢進入急跌宣洩與融資清洗階段！想掌握大盤何時出現破底翻止跌訊號嗎？", "💬 點此私訊您的專屬營業員：預約【持股壓力測試 & 超跌反彈布局討論】"
+    return {"total": total, "light": light, "color": clr, "cta_title": ct, "cta_btn": cb, "breakdown": breakdown, "macro": macro}
+
+# ==========================================
+# 5. 全市場 2,100 檔產業分類與 16 大族群動態活水引擎
 # ==========================================
 @st.cache_data(ttl=86400)
-def fetch_all_market_industry_map():
-    """
-    從證交所 (t187ap03_L) 與櫃買中心 (tpex_mainboard_company_info) 抓取全台灣上市櫃公司之官方產業分類代碼與名稱！
-    """
-    if os.path.exists(INDUSTRY_CACHE_FILE):
-        try:
-            with open(INDUSTRY_CACHE_FILE, "r", encoding="utf-8") as f:
-                cached = json.load(f)
-                if len(cached) > 1000: return cached
-        except Exception: pass
+def fetch_all_stock_industry_map():
+    """抓取全市場上市櫃公司之官方產業分類，讓全市場任一檔新飆股都能 100% 歸入對應族群！"""
+    ind_map = {}
+    try:
+        r = GLOBAL_HTTP_SESSION.get("https://api.finmindtrade.com/api/v4/data", params={"dataset": "TaiwanStockInfo"}, timeout=7, verify=False)
+        if r.status_code == 200 and r.json().get("data"):
+            for it in r.json()["data"]:
+                c, cat = str(it.get("stock_id", "")).strip(), str(it.get("industry_category", "")).strip()
+                if re.match(r"^\d{4}$", c) and cat and cat not in ["Index", "ETF", "大盤"]:
+                    ind_map[c] = cat
+    except Exception: pass
+    return ind_map
 
-    ind_code_map = {
-        "01": "水泥工業", "02": "食品工業", "03": "塑膠工業", "04": "紡織纖維", "05": "電機機械",
-        "06": "電器電纜", "08": "玻璃陶瓷", "09": "造紙工業", "10": "鋼鐵工業", "11": "橡膠工業",
-        "12": "汽車工業", "14": "建材營造", "15": "航運業", "16": "觀光餐旅", "17": "金融保險",
-        "18": "貿易百貨", "20": "其他業", "21": "化學工業", "22": "生技醫療業", "23": "油電燃氣業",
-        "24": "半導體業", "25": "電腦及週邊設備業", "26": "光電業", "27": "通信網路業",
-        "28": "電子零組件業", "29": "電子通路業", "30": "資訊服務業", "31": "其他電子業",
-        "32": "文化創意業", "33": "農業科技業", "34": "電子商務", "35": "綠能環保",
-        "36": "數位雲端", "37": "運動休閒", "38": "居家生活"
-    }
-    stock_ind = {}
-    for url, c_k, i_k in [
-        ("https://openapi.twse.com.tw/v1/opendata/t187ap03_L", "公司代號", "產業別"),
-        ("https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O", "SecuritiesCompanyCode", "CompanyCategory")
+@st.cache_data(ttl=600)
+def fetch_full_market_snapshot_and_breadth(fallback_fg=34):
+    """一次連線取得全市場上市櫃 2,100 檔最新收盤、單日漲跌幅、成交金額與騰落家數 (耗時僅 0.8 秒)"""
+    up_cnt = down_cnt = flat_cnt = 0
+    market_snap = {}
+    for url, mkt, c_k, n_k, cl_k, chg_k, val_k in [
+        ("https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL", "TWSE", "Code", "Name", "ClosingPrice", "Change", "TradeValue"),
+        ("https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes", "TPEX", "SecuritiesCompanyCode", "CompanyName", "Close", "Change", "TransactionAmount")
     ]:
         try:
             r = GLOBAL_HTTP_SESSION.get(url, timeout=8, verify=False)
             if r.status_code == 200:
                 for it in r.json():
-                    c = str(it.get(c_k, "")).strip()
-                    raw_i = str(it.get(i_k, "")).strip().zfill(2)
-                    if re.match(r"^\d{4}$", c):
-                        stock_ind[c] = ind_code_map.get(raw_i, raw_i if len(raw_i) > 2 else "其他電子與傳產")
+                    code = str(it.get(c_k, "")).strip()
+                    if not re.match(r"^\d{4}$", code): continue
+                    name = str(it.get(n_k, "")).strip()
+                    try:
+                        close_v = float(str(it.get(cl_k, "0")).replace(",", "").strip())
+                        chg_v = float(str(it.get(chg_k, "0")).replace(",", "").replace("+", "").replace(" ", "").strip())
+                        val_v = float(str(it.get(val_k, "0")).replace(",", "").strip())
+                        prev_v = close_v - chg_v
+                        pct_v = round((chg_v / prev_v) * 100.0, 2) if prev_v > 0 else 0.0
+                        if chg_v > 0: up_cnt += 1
+                        elif chg_v < 0: down_cnt += 1
+                        else: flat_cnt += 1
+                        if close_v > 0:
+                            market_snap[code] = {"code": code, "name": name, "mkt": mkt, "close": close_v, "chg_1d_pct": pct_v, "trade_val_yi": round(val_v / 1e8, 2)}
+                    except Exception: flat_cnt += 1
         except Exception: pass
 
-    if len(stock_ind) < 500:
-        try:
-            r_fm = GLOBAL_HTTP_SESSION.get("https://api.finmindtrade.com/api/v4/data", params={"dataset": "TaiwanStockInfo"}, timeout=8, verify=False)
-            if r_fm.status_code == 200 and r_fm.json().get("data"):
-                for it in r_fm.json()["data"]:
-                    c, cat = str(it.get("stock_id", "")).strip(), str(it.get("industry_category", "")).strip()
-                    if re.match(r"^\d{4}$", c) and cat: stock_ind[c] = cat
-        except Exception: pass
-
-    if len(stock_ind) > 500:
-        try:
-            with open(INDUSTRY_CACHE_FILE, "w", encoding="utf-8") as f: json.dump(stock_ind, f, ensure_ascii=False)
-        except Exception: pass
-    return stock_ind
-
-@st.cache_data(ttl=600)
-def fetch_all_market_snapshot():
-    """
-    0.8 秒極速抓取全市場 2,100+ 檔上市櫃最新收盤價、單日漲跌幅、成交張數與成交值！
-    """
-    snap = {}
-    # 1. 上市 TWSE
-    try:
-        r_tw = GLOBAL_HTTP_SESSION.get("https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL", timeout=8, verify=False)
-        if r_tw.status_code == 200:
-            for it in r_tw.json():
-                c = str(it.get("Code", "")).strip()
-                if not re.match(r"^\d{4}$", c): continue
-                try:
-                    cp = float(str(it.get("ClosingPrice", "0")).replace(",", ""))
-                    chg = float(str(it.get("Change", "0")).replace(",", "").replace("+", "").replace("X", ""))
-                    vol_sh = float(str(it.get("TradeVolume", "0")).replace(",", ""))
-                    val_ntd = float(str(it.get("TradeValue", "0")).replace(",", ""))
-                    prev_p = cp - chg
-                    chg_pct = round((chg / prev_p) * 100.0, 2) if prev_p > 0 else 0.0
-                    if cp > 0:
-                        snap[c] = {"code": c, "name": str(it.get("Name", c)).strip(), "mkt": "TWSE", "close": cp, "chg_pct": chg_pct, "vol_lots": int(vol_sh // 1000), "val_yi": round(val_ntd / 1e8, 2)}
-                except Exception: continue
-    except Exception: pass
-
-    # 2. 上櫃 TPEX
-    try:
-        r_tp = GLOBAL_HTTP_SESSION.get("https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes", timeout=8, verify=False)
-        if r_tp.status_code == 200:
-            for it in r_tp.json():
-                c = str(it.get("SecuritiesCompanyCode", "")).strip()
-                if not re.match(r"^\d{4}$", c): continue
-                try:
-                    cp = float(str(it.get("Close", "0")).replace(",", ""))
-                    chg = float(str(it.get("Change", "0")).replace(",", "").replace("+", ""))
-                    vol_sh = float(str(it.get("TradingShares", "0")).replace(",", ""))
-                    val_ntd = float(str(it.get("TransactionAmount", "0")).replace(",", ""))
-                    prev_p = cp - chg
-                    chg_pct = round((chg / prev_p) * 100.0, 2) if prev_p > 0 else 0.0
-                    if cp > 0:
-                        snap[c] = {"code": c, "name": str(it.get("CompanyName", c)).strip(), "mkt": "TPEX", "close": cp, "chg_pct": chg_pct, "vol_lots": int(vol_sh // 1000), "val_yi": round(val_ntd / 1e8, 2)}
-                except Exception: continue
-    except Exception: pass
-    return snap
-
-@st.cache_data(ttl=900)
-def fetch_market_breadth_and_fear_greed(fallback_fg=34):
-    snap = fetch_all_market_snapshot()
-    up_cnt = sum(1 for v in snap.values() if v["chg_pct"] > 0)
-    down_cnt = sum(1 for v in snap.values() if v["chg_pct"] < 0)
-    flat_cnt = sum(1 for v in snap.values() if v["chg_pct"] == 0)
     breadth_ok = (up_cnt + down_cnt) > 100
-
     fg_score, fg_source = int(fallback_fg), "後台校準值"
     try:
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", "Accept": "application/json", "Referer": "https://edition.cnn.com/markets/fear-and-greed"}
-        r_cnn = GLOBAL_HTTP_SESSION.get("https://production.dataviz.cnn.io/index/fearandgreed/graphdata", headers=headers, timeout=5, verify=False)
-        if r_cnn.status_code == 200:
-            score_val = r_cnn.json().get("fear_and_greed", {}).get("score")
-            if score_val is not None: fg_score, fg_source = int(round(float(score_val))), "CNN自動連線"
+        r_cnn = GLOBAL_HTTP_SESSION.get("https://production.dataviz.cnn.io/index/fearandgreed/graphdata", headers={"Accept": "application/json", "Referer": "https://edition.cnn.com/"}, timeout=4, verify=False)
+        if r_cnn.status_code == 200 and r_cnn.json().get("fear_and_greed", {}).get("score") is not None:
+            fg_score, fg_source = int(round(float(r_cnn.json()["fear_and_greed"]["score"]))), "CNN自動連線"
     except Exception: pass
-    return {"breadth_ok": breadth_ok, "up_cnt": up_cnt, "down_cnt": down_cnt, "flat_cnt": flat_cnt, "adl_diff": up_cnt - down_cnt, "up_ratio": round((up_cnt / max(1, up_cnt + down_cnt)) * 100, 1) if breadth_ok else 50.0, "fg_score": fg_score, "fg_source": fg_source}
 
-@st.cache_data(ttl=600)
-def fetch_macro_fx_and_sox(taiex_kline_records):
-    """
-    【v11.0 總體資金與國際連動引擎】
-    1. 抓取美元兌新台幣匯率 (TWD=X)：判斷外資熱錢是匯入(升值)還是匯出(貶值)
-    2. 抓取美股費城半導體指數 (^SOX)：並自動計算與台股加權指數「近 20 日滾動皮爾森相關係數 (r)」！
-    """
-    res = {
-        "fx_ok": False, "usd_twd": 32.0, "fx_chg_5d": 0.0, "fx_ma20": 32.0, "fx_status": "匯率中性",
-        "sox_ok": False, "sox_close": 5000.0, "sox_chg_1d": 0.0, "sox_chg_5d": 0.0, "sox_corr_20d": 0.65
+    return {
+        "breadth_ok": breadth_ok, "up_cnt": up_cnt, "down_cnt": down_cnt, "flat_cnt": flat_cnt,
+        "adl_diff": up_cnt - down_cnt, "up_ratio": round((up_cnt / max(1, up_cnt + down_cnt)) * 100, 1) if breadth_ok else 50.0,
+        "fg_score": fg_score, "fg_source": fg_source, "market_snap": market_snap
     }
-    try:
-        df_fx, _ = fetch_kline_df_bypass_ssl("TWD=X", "TWSE", range_str="2mo")
-        if len(df_fx) >= 20:
-            c_fx = round(float(df_fx["Close"].iloc[-1]), 3)
-            p5_fx = round(float(df_fx["Close"].iloc[-6]), 3)
-            m20_fx = round(float(df_fx["Close"].tail(20).mean()), 3)
-            chg5 = round(c_fx - p5_fx, 3)
-            status = "🟢 台幣升值熱錢流入" if (c_fx < m20_fx and chg5 <= 0) else ("🚨 台幣貶值資金外流" if (c_fx > m20_fx and chg5 >= 0.08) else "⚖️ 匯率區間震盪")
-            res.update({"fx_ok": True, "usd_twd": c_fx, "fx_chg_5d": chg5, "fx_ma20": m20_fx, "fx_status": status})
-    except Exception: pass
 
-    try:
-        df_sox, _ = fetch_kline_df_bypass_ssl("^SOX", "TWSE", range_str="3mo")
-        if len(df_sox) >= 22:
-            c_s, p1_s, p5_s = float(df_sox["Close"].iloc[-1]), float(df_sox["Close"].iloc[-2]), float(df_sox["Close"].iloc[-6])
-            sox_1d = round(((c_s - p1_s) / p1_s) * 100.0, 2)
-            sox_5d = round(((c_s - p5_s) / p5_s) * 100.0, 2)
-            # 計算近 20 日費半與台股漲跌幅之皮爾森相關係數 (r)
-            df_tw = pd.DataFrame(taiex_kline_records)
-            tw_ret = df_tw["Close"].pct_change().dropna().tail(20).reset_index(drop=True)
-            sox_ret = df_sox["Close"].pct_change().dropna().tail(20).reset_index(drop=True)
-            min_len = min(len(tw_ret), len(sox_ret))
-            corr_val = round(float(tw_ret.tail(min_len).corr(sox_ret.tail(min_len))), 2) if min_len >= 10 else 0.65
-            if pd.isna(corr_val): corr_val = 0.50
-            res.update({"sox_ok": True, "sox_close": round(c_s, 1), "sox_chg_1d": sox_1d, "sox_chg_5d": sox_5d, "sox_corr_20d": corr_val})
-    except Exception: pass
-    return res
+def fetch_market_breadth_and_fear_greed(fallback_fg=34):
+    return fetch_full_market_snapshot_and_breadth(fallback_fg)
 
 @st.cache_data(ttl=300)
 def fetch_taiex_market_data():
     hist, err_msg = fetch_kline_df_bypass_ssl("^TWII", "TWSE", range_str="6mo")
     if hist.empty or len(hist) < 20: return {"ok": False, "err_msg": err_msg}
     hist = compute_td_sequential_and_bbands(hist)
-    latest, prev = hist.iloc[-1], hist.iloc[-2]
-    close_p, open_p, high_p, low_p = [round(float(latest[k]), 1) for k in ("Close", "Open", "High", "Low")]
-    prev_close, prev_open, prev_low = [round(float(prev[k]), 1) for k in ("Close", "Open", "Low")]
-    if abs(high_p - low_p) < 1.0:
-        half_r = max(80.0, round((float(prev["High"]) - float(prev["Low"])) * 0.5, 1))
-        high_p, low_p = round(close_p + half_r, 1), round(close_p - half_r, 1)
-
+    lt, pv = hist.iloc[-1], hist.iloc[-2]
+    cp, op, hp, lp = [round(float(lt[k]), 1) for k in ("Close", "Open", "High", "Low")]
+    pc, po, pl = [round(float(pv[k]), 1) for k in ("Close", "Open", "Low")]
+    p5 = float(hist["Close"].iloc[-6]) if len(hist) >= 6 else pc
+    if abs(hp - lp) < 1.0:
+        hr = max(80.0, round((float(pv["High"]) - float(pv["Low"])) * 0.5, 1))
+        hp, lp = round(cp + hr, 1), round(cp - hr, 1)
     ma5, ma20 = round(float(hist["MA5"].iloc[-1]), 1), round(float(hist["MA20"].iloc[-1]), 1)
     ma60 = round(float(hist["MA60"].iloc[-1]), 1) if pd.notna(hist["MA60"].iloc[-1]) else ma20
-    bb_up = round(float(hist["BB_Upper"].iloc[-1]), 1) if pd.notna(hist["BB_Upper"].iloc[-1]) else close_p
-    bb_dn = round(float(hist["BB_Lower"].iloc[-1]), 1) if pd.notna(hist["BB_Lower"].iloc[-1]) else close_p
-    prev_bb_dn = round(float(hist["BB_Lower"].iloc[-2]), 1) if pd.notna(hist["BB_Lower"].iloc[-2]) else prev_close
-    k_val, d_val, prev_k, prev_d, _, _, rsi14 = calc_kd_rsi_macd(hist)
-
-    lower_shadow = min(open_p, close_p) - low_p
-    has_long_lower_shadow = (lower_shadow / max(1.0, high_p - low_p)) >= 0.42 and (lower_shadow >= 80)
-    is_bull_engulf = (close_p > open_p) and (prev_close < prev_open) and (close_p >= prev_open) and (open_p <= prev_close)
-    no_new_low = low_p >= prev_low
-    reclaimed_bb_low = (low_p <= bb_dn or prev_low <= prev_bb_dn) and (close_p > bb_dn)
-
-    bb_status = "🚨 跌破布林下軌 (極端超跌宣洩中)" if close_p < bb_dn else ("✅ 破底後重新站回布林下軌 (止跌訊號！)" if reclaimed_bb_low else ("🔥 突破布林上軌 (極強勢鈍化)" if close_p >= bb_up else ("📈 位於布林中軌(月線)與上軌之間" if close_p >= ma20 else "⚠️ 位於布林中軌(月線)與下軌之間")))
-    k_pattern_list = ([f"✅長下影線({int(lower_shadow)}點)"] if has_long_lower_shadow else []) + (["✅紅K吞噬"] if is_bull_engulf else []) + (["✅未破前日低點"] if no_new_low else ["⚠️跌破前日低點"])
-
+    bbu, bbd = round(float(hist["BB_Upper"].iloc[-1]), 1), round(float(hist["BB_Lower"].iloc[-1]), 1)
+    p_bbd = round(float(hist["BB_Lower"].iloc[-2]), 1) if pd.notna(hist["BB_Lower"].iloc[-2]) else pc
+    kv, dv, pkv, pdv, _, _, rsi14 = calc_kd_rsi_macd(hist)
+    l_sh = min(op, cp) - lp
+    has_l_sh = (l_sh / max(1.0, hp - lp)) >= 0.42 and (l_sh >= 80)
+    is_eng = (cp > op) and (pc < po) and (cp >= po) and (op <= pc)
+    no_nl = lp >= pl
+    rec_bb = (lp <= bbd or pl <= p_bbd) and (cp > bbd)
+    bb_st = "🚨 跌破布林下軌 (極端超跌)" if cp < bbd else ("✅ 破底站回布林下軌 (止跌訊號)" if rec_bb else ("🔥 突破布林上軌 (強勢鈍化)" if cp >= bbu else ("📈 布林中軌至上軌間" if cp >= ma20 else "⚠️ 布林中軌至下軌間")))
+    k_pats = ([f"✅長下影線({int(l_sh)}點)"] if has_l_sh else []) + (["✅紅K吞噬"] if is_eng else []) + (["✅未破前低"] if no_nl else ["⚠️跌破前低"])
     hist_60 = hist.tail(60).copy()
-    hist_60["DateStr"] = hist_60.index.strftime("%Y-%m-%d")
-    hist_60["ShortDate"] = hist_60.index.strftime("%m-%d")
+    hist_60["DateStr"], hist_60["ShortDate"] = hist_60.index.strftime("%Y-%m-%d"), hist_60.index.strftime("%m-%d")
+    macro_info = fetch_macro_fx_and_sox(hist)
     return {
-        "ok": True, "date": hist.index[-1].strftime("%Y-%m-%d"), "close": close_p, "open": open_p, "chg": round(close_p - prev_close, 1),
-        "high": high_p, "low": low_p, "ma5": ma5, "ma20": ma20, "ma60": ma60, "bias20": round(((close_p - ma20) / ma20) * 100.0, 2) if ma20 > 0 else 0.0,
-        "bb_upper": bb_up, "bb_lower": bb_dn, "bb_status": bb_status, "reclaimed_bb_low": reclaimed_bb_low,
-        "k_pattern_str": " ｜ ".join(k_pattern_list), "has_long_shadow": has_long_lower_shadow, "is_bull_engulf": is_bull_engulf, "no_new_low": no_new_low,
-        "td_buy": int(hist["TD_Buy"].iloc[-1]), "td_sell": int(hist["TD_Sell"].iloc[-1]), "K": k_val, "D": d_val, "prev_K": prev_k, "prev_D": prev_d, "rsi": rsi14,
+        "ok": True, "date": hist.index[-1].strftime("%Y-%m-%d"), "close": cp, "open": op, "chg": round(cp - pc, 1),
+        "chg_5d_pct": round(((cp - p5) / p5) * 100.0, 2) if p5 > 0 else 0.0,
+        "high": hp, "low": lp, "ma5": ma5, "ma20": ma20, "ma60": ma60, "bias20": round(((cp - ma20) / ma20) * 100.0, 2) if ma20 > 0 else 0.0,
+        "bb_upper": bbu, "bb_lower": bbd, "bb_status": bb_st, "reclaimed_bb_low": rec_bb,
+        "k_pattern_str": " ｜ ".join(k_pats), "has_long_shadow": has_l_sh, "is_bull_engulf": is_eng, "no_new_low": no_nl,
+        "td_buy": int(hist["TD_Buy"].iloc[-1]), "td_sell": int(hist["TD_Sell"].iloc[-1]), "K": kv, "D": dv, "prev_K": pkv, "prev_D": pdv, "rsi": rsi14,
         "deduct": round(float(hist["Close"].iloc[-20]), 1), "deduct_date": hist.index[-20].strftime("%Y-%m-%d"),
+        "macro": macro_info,
         "kline_60": hist_60[["DateStr", "ShortDate", "Open", "High", "Low", "Close", "MA5", "MA20", "MA60", "BB_Upper", "BB_Lower", "TD_Buy", "TD_Sell", "TD_Buy_Disp", "TD_Sell_Disp"]].to_dict("records")
     }
 
 @st.cache_data(ttl=600)
 def scan_sector_performance(sector_map_json_str, margins_dict):
     """
-    【v11.0 全市場活水自動歸類族群引擎】
-    1. 結合「16 大戰略族群核心股」與「證交所/櫃買全市場 1,800+ 檔官方產業分類」！
-    2. 自動從全市場掃描今日「成交值 > 3 億 且 單日上漲 ≥ 2.5%」的強勢新面孔：
-       • 若其所屬產業對應 16 大族群，自動併入該族群並標示『🔥[動態新星]』！
-       • 若資金湧入原本 16 類以外的官方產業（如：生技醫療、化學工業、建材營造、金融保險、資訊服務等），自動整隊浮現為『🌟 [動態主流] XX族群』！
-    3. 每一檔入榜股票 100% 都有明確的族群歸屬，徹底告別死板名單與無分類雜牌軍！
+    【v11.0 動態活水族群引擎】
+    1. 掃描全市場 2,100 檔即時報價與官方產業分類：
+       - 若全市場出現「今日帶量上漲 (>2.5% 且成交值前段班)」但不在原本 93 檔內的新飆股，
+         自動依其官方產業分類注入對應的 16 大族群（標示 🔥[動態入榜]）！
+       - 若今日資金湧入原本 16 類以外的官方產業（如生技醫療、化學工業、金融、營建、觀光等），
+         自動將今日最強的動態產業整隊浮現為『🌟 [動態主流] XX業』，100% 每一檔都有清楚的族群歸屬！
     """
     sec_map = json.loads(sector_map_json_str)
-    ind_map = fetch_all_market_industry_map()
-    snap_all = fetch_all_market_snapshot()
+    ind_map = fetch_all_stock_industry_map()
+    snap_data = fetch_full_market_snapshot_and_breadth().get("market_snap", {})
 
     existing_codes = {item[0] for s_list in sec_map.values() for item in s_list}
-    dynamic_sec_map = {k: [list(x) for x in v] for k, v in sec_map.items()}
 
-    # 從全市場 1800+ 檔中篩選出今日帶量轉強的新面孔 (成交值 >= 3億 且 漲幅 >= 2.0%)
+    # 從全市場 2,100 檔找出今日成交值 >= 3 億且漲幅前 45 名的強勢活水股
     hot_candidates = sorted(
-        [v for k, v in snap_all.items() if k not in existing_codes and v["val_yi"] >= 3.0 and v["chg_pct"] >= 2.0],
-        key=lambda x: (x["chg_pct"] * math.log10(max(2.0, x["val_yi"]))),
-        reverse=True
-    )
+        [v for k, v in snap_data.items() if k not in existing_codes and v["trade_val_yi"] >= 3.0 and v["chg_1d_pct"] >= 1.5],
+        key=lambda x: (x["chg_1d_pct"] * 0.6 + min(20, x["trade_val_yi"]) * 0.4), reverse=True
+    )[:36]
 
-    extra_industry_buckets = {}
-    for cand in hot_candidates[:35]:
-        c_code, c_name, c_mkt = cand["code"], cand["name"], cand["mkt"]
-        ind_cat = ind_map.get(c_code, "其他電子業")
-
-        # 依關鍵字與官方產業智慧歸隊至 16 大族群或新主流產業籃
-        target_16 = None
-        if any(k in c_name for k in ["光", "訊", "波", "聯", "華星"]): target_16 = "4. CPO矽光子與光通訊"
-        elif any(k in c_name for k in ["散熱", "雙", "奇", "力致", "高力"]): target_16 = "5. AI散熱與水冷模組"
-        elif any(k in c_name for k in ["電", "亞力", "華城", "中興", "森崴", "雲豹"]): target_16 = "15. 重電電網與綠能儲能"
-        elif ind_cat in OFFICIAL_IND_TO_16_MAP: target_16 = OFFICIAL_IND_TO_16_MAP[ind_cat]
-
-        if target_16 and target_16 in dynamic_sec_map and len(dynamic_sec_map[target_16]) < 10:
-            dynamic_sec_map[target_16].append([c_code, f"{c_name} 🔥[動態新星]", c_mkt])
+    extra_ind_buckets = {}
+    for hc in hot_candidates:
+        c, n, mkt = hc["code"], hc["name"], hc["mkt"]
+        ind_cat = ind_map.get(c, "電子零組件業")
+        target_sec = INDUSTRY_TO_SECTOR_BRIDGE.get(ind_cat)
+        if target_sec and target_sec in sec_map and len(sec_map[target_sec]) < 10:
+            sec_map[target_sec].append([c, f"{n}🔥", mkt])
+            existing_codes.add(c)
         else:
-            bucket_name = f"🌟 [動態主流] {ind_cat}族群"
-            extra_industry_buckets.setdefault(bucket_name, []).append([c_code, f"{c_name} 🔥[帶量轉強]", c_mkt])
+            dyn_sec_name = f"🌟 [動態主流] {ind_cat}"
+            extra_ind_buckets.setdefault(dyn_sec_name, []).append([c, f"{n}🔥", mkt])
 
-    # 若某個新興官方產業今日有 >= 2 檔帶量強勢股（或單檔超級強勢股），直接整隊浮現進排行榜！
-    for b_name, b_stocks in extra_industry_buckets.items():
-        if len(b_stocks) >= 2:
-            dynamic_sec_map[b_name] = b_stocks[:7]
+    # 若某個非 16 類的新興產業今日有 >= 2 檔同時爆量轉強，整族自動浮現加入排行榜！
+    for dyn_name, dyn_list in extra_ind_buckets.items():
+        if len(dyn_list) >= 2:
+            sec_map[dyn_name] = dyn_list[:6]
 
-    tasks = [(sec_name, item[0], item[1], item[2]) for sec_name, s_list in dynamic_sec_map.items() for item in s_list]
-    sector_records = {k: [] for k in dynamic_sec_map.keys()}
+    tasks = [(sec_name, item[0], item[1], item[2]) for sec_name, s_list in sec_map.items() for item in s_list]
+    sector_records = {k: [] for k in sec_map.keys()}
 
     def _worker(task_item):
         sec_name, code, name, mkt = task_item
@@ -919,9 +827,8 @@ def scan_sector_performance(sector_map_json_str, margins_dict):
         close_p, prev_1d, prev_5d = round(float(sub["Close"].iloc[-1]), 2), float(sub["Close"].iloc[-2]), float(sub["Close"].iloc[-6])
         ma20 = round(float(sub["Close"].tail(20).mean()), 2) if len(sub) >= 20 else close_p
         m_rate = float(margins_dict.get(code, 13.5)) / 100.0
-        ind_label = ind_map.get(code, "電子/傳產")
         return sec_name, {
-            "代號": code, "名稱": name, "官方產業": ind_label, "最新收盤(元)": close_p,
+            "代號": code, "名稱": name, "最新收盤(元)": close_p,
             "近1日漲跌(%)": round(((close_p - prev_1d) / prev_1d) * 100, 2) if prev_1d > 0 else 0.0,
             "近5日漲跌(%)": round(((close_p - prev_5d) / prev_5d) * 100, 2) if prev_5d > 0 else 0.0,
             "月線(20MA)": ma20, "趨勢位階": "✅站上月線" if close_p >= ma20 else "⚠️月線之下",
@@ -940,90 +847,137 @@ def scan_sector_performance(sector_map_json_str, margins_dict):
         if items:
             top_stock = sorted(items, key=lambda x: x["近5日漲跌(%)"], reverse=True)[0]
             lead_str = f"{top_stock['代號']} {top_stock['名稱']} ({top_stock['近5日漲跌(%)']:+}%)"
-            new_star_cnt = sum(1 for x in items if "🔥" in x["名稱"])
-            cnt_label = f"{len(items)} 檔" + (f" (含🔥新星{new_star_cnt}檔)" if new_star_cnt > 0 else "")
             summary_list.append({
-                "族群名稱": sec_name, "成分股數": cnt_label,
+                "族群名稱": sec_name, "成分股數": f"{len(items)} 檔",
                 "近1日平均漲跌(%)": round(sum(x["近1日漲跌(%)"] for x in items) / len(items), 2),
                 "近5日平均漲跌(%)": round(sum(x["近5日漲跌(%)"] for x in items) / len(items), 2),
                 "領漲指標股": lead_str, "近5日領漲指標股": lead_str,
                 "stocks": sorted(items, key=lambda x: x["近5日漲跌(%)"], reverse=True)
             })
-    return sorted(summary_list, key=lambda x: (x["近1日平均漲跌(%)"] * 0.45 + x["近5日平均漲跌(%)"] * 0.55), reverse=True)
+    return sorted(summary_list, key=lambda x: (x["近1日平均漲跌(%)"] * 0.4 + x["近5日平均漲跌(%)"] * 0.6), reverse=True)
 
 @st.cache_data(ttl=1800)
 def fetch_stock_news(code, name):
-    raw_items, headers = [], {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-    bad_words = {"南亞": ["南亞科", "南亞電"], "台塑": ["台塑化"], "聯電": ["聯電集團"], "中鋼": ["中鋼構"], "長榮": ["長榮航", "長榮鋼", "長榮航太"], "陽明": ["陽明交大"], "富邦": ["富邦媒"]}.get(name, [])
-    for q_str in [f'"{code}" "{name}" when:7d', f'"{name}" 股 when:7d', f'{code} {name}']:
+    raw_items = []
+    clean_n = name.replace("🔥", "").strip()
+    bad_w = {"南亞": ["南亞科", "南亞電"], "台塑": ["台塑化"], "長榮": ["長榮航", "長榮鋼"]}.get(clean_n, [])
+    for q_s in [f'"{code}" "{clean_n}" when:7d', f'"{clean_n}" 股 when:7d']:
         try:
-            resp = GLOBAL_HTTP_SESSION.get(f"https://news.google.com/rss/search?q={urllib.parse.quote(q_str)}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant", headers=headers, timeout=6, verify=False)
+            resp = GLOBAL_HTTP_SESSION.get(f"https://news.google.com/rss/search?q={urllib.parse.quote(q_s)}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant", timeout=5, verify=False)
             if resp.status_code == 200:
-                for item in ET.fromstring(resp.content).findall(".//item")[:25]:
-                    title = item.find("title").text if item.find("title") is not None else ""
-                    if not title or name not in title: continue
-                    temp_t = title
-                    for bw in bad_words: temp_t = temp_t.replace(bw, "")
-                    if name not in temp_t: continue
+                for it in ET.fromstring(resp.content).findall(".//item")[:20]:
+                    t = it.find("title").text if it.find("title") is not None else ""
+                    if not t or clean_n not in t: continue
+                    tmp = t
+                    for bw in bad_w: tmp = tmp.replace(bw, "")
+                    if clean_n not in tmp: continue
                     try:
-                        dt = parsedate_to_datetime(item.find("pubDate").text)
+                        dt = parsedate_to_datetime(it.find("pubDate").text)
                         if dt.tzinfo is None: dt = dt.replace(tzinfo=timezone.utc)
                     except Exception: dt = datetime.now(timezone.utc)
-                    raw_items.append({"title": title, "link": item.find("link").text if item.find("link") is not None else "#", "dt": dt})
+                    raw_items.append({"title": t, "link": it.find("link").text if it.find("link") is not None else "#", "dt": dt})
             if len(raw_items) >= 3: break
         except Exception: continue
-
     raw_items.sort(key=lambda x: x["dt"], reverse=True)
-    seen_titles, final_news, now_utc = set(), [], datetime.now(timezone.utc)
-    for item in raw_items:
-        clean_t = item["title"].split(" - ")[0].strip()
-        if clean_t in seen_titles: continue
-        seen_titles.add(clean_t)
-        diff_h = max(0, int((now_utc - item["dt"]).total_seconds() // 3600))
-        ago_str = (f"{diff_h} 小時前" if diff_h > 0 else "剛剛") if diff_h < 24 else f"{diff_h // 24} 天前 ({item['dt'].strftime('%m/%d')})"
-        t_text = item["title"]
-        tag = "📊 財報營收" if any(w in t_text for w in ["營收", "EPS", "財報", "獲利", "毛利", "配息", "股利"]) else ("🏛️ 法人籌碼" if any(w in t_text for w in ["外資", "投信", "法人", "買超", "賣超", "目標價"]) else ("🎙️ 公司動態" if any(w in t_text for w in ["法說", "股東會", "股臨會", "董座", "擴產", "訂單", "併購"]) else "📰 盤勢焦點"))
-        final_news.append({"title": item["title"], "link": item["link"], "date_str": item["dt"].strftime("%Y-%m-%d %H:%M"), "ago": ago_str, "tag": tag})
-        if len(final_news) >= 4: break
-    return {"news": final_news}
+    seen, final_n, now_u = set(), [], datetime.now(timezone.utc)
+    for it in raw_items:
+        ct = it["title"].split(" - ")[0].strip()
+        if ct in seen: continue
+        seen.add(ct)
+        dh = max(0, int((now_u - it["dt"]).total_seconds() // 3600))
+        ago = (f"{dh} 小時前" if dh > 0 else "剛剛") if dh < 24 else f"{dh // 24} 天前 ({it['dt'].strftime('%m/%d')})"
+        tag = "📊 財報營收" if any(w in ct for w in ["營收", "EPS", "財報", "獲利", "毛利", "配息"]) else ("🏛️ 法人籌碼" if any(w in ct for w in ["外資", "投信", "法人", "買超", "目標價"]) else "📰 盤勢焦點")
+        final_n.append({"title": it["title"], "link": it["link"], "ago": ago, "tag": tag})
+        if len(final_n) >= 4: break
+    return {"news": final_n}
 
-# ==========================================
-# 5. 【v11.0 機構全維度動態評分引擎】(個股 4 維度 vs 大盤 5 維度)
-# ==========================================
-def evaluate_stock_comprehensive(tech, chip, margin_info=None, tech_60m=None, tech_5m=None, rev_info=None, bull_c="#FF6B6B", bear_c="#2ECC71", warn_c="#F1C40F"):
-    """
-    【v11.0 個股 100 分制 4 大動態維度評分】
-    1. 相對大盤強弱 (Alpha) & 日K趨勢 (滿分 25 分)
-    2. 三週期共振 (60分K/5分K) & 動能指標 (滿分 25 分)
-    3. 外本比/投本比 (吃貨濃度%) & 資券乾淨度 (滿分 30 分)
-    4. 月營收 YoY 加速度 (ΔYoY) & 利多出盡檢驗 (滿分 20 分；若無營收資料如ETF則按比例換算至100分)
-    """
-    c, ma5, ma20, ma60, ded = tech["close"], tech["ma5"], tech["ma20"], tech["ma60"], tech["deduct"]
-    alpha_1d, alpha_5d = tech.get("alpha_1d", 0.0), tech.get("alpha_5d", 0.0)
-    kv, dv, macd_osc, rsi_val, vol_r = tech["K"], tech["D"], tech["macd_osc"], tech["rsi"], tech["vol_ratio"]
-    vol_5d_lots = max(1.0, tech.get("vol_5d_lots", 5000.0))
-    cdp_p = round((tech["high"] + tech["low"] + 2 * c) / 4.0, 2)
+def extract_stocks_from_image_via_gemini(image_bytes, mime_type, api_key):
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+    payload = {"contents": [{"parts": [{"text": "請從截圖辨識所有台股4碼代號或股票名稱，用逗號分隔回傳"}, {"inline_data": {"mime_type": mime_type, "data": base64.b64encode(image_bytes).decode("utf-8")}}]}]}
+    resp = GLOBAL_HTTP_SESSION.post(url, json=payload, timeout=15, verify=False)
+    return resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip() if resp.status_code == 200 else ""
 
-    breakdown = []
+def fetch_taifex_foreign_tx_oi_csv(fm_token=""):
+    sess = requests.Session()
+    headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.taifex.com.tw/cht/3/futContractsDate"}
+    now_dt = pd.Timestamp.now()
+    try:
+        sess.get("https://www.taifex.com.tw/cht/3/futContractsDate", headers=headers, timeout=4, verify=False)
+        r = sess.post("https://www.taifex.com.tw/cht/3/futContractsDateDown", data={"queryType": "1", "doQuery": "1", "queryStartDate": (now_dt - pd.Timedelta(days=14)).strftime("%Y/%m/%d"), "queryEndDate": now_dt.strftime("%Y/%m/%d"), "commodityId": "TX"}, headers=headers, timeout=7, verify=False)
+        if r.status_code == 200 and len(r.content) > 100:
+            for enc in ["cp950", "utf-8-sig", "utf-8"]:
+                txt = r.content.decode(enc, errors="ignore")
+                if "外資" in txt:
+                    d_map = {}
+                    for row in csv.reader(io.StringIO(txt)):
+                        if len(row) >= 12 and "外資" in " ".join(str(c) for c in row[:4]):
+                            for cand in ([row[13]] if len(row) > 13 else []) + [row[-2]]:
+                                vc = str(cand).replace(",", "").strip()
+                                if re.match(r"^-?\d+$", vc): d_map[str(row[0]).strip().replace("-", "/")] = int(vc); break
+                    if len(d_map) >= 2:
+                        s_dts = sorted(d_map.keys())
+                        return {"mkt_foreign_oi": d_map[s_dts[-1]], "mkt_foreign_oi_chg": d_map[s_dts[-1]] - d_map[s_dts[-2]]}
+    except Exception: pass
+    try:
+        params = {"dataset": "TaiwanFuturesInstitutionalInvestors", "data_id": "TX", "start_date": (now_dt - pd.Timedelta(days=15)).strftime("%Y-%m-%d")}
+        if fm_token: params["token"] = fm_token
+        r_fm = GLOBAL_HTTP_SESSION.get("https://api.finmindtrade.com/api/v4/data", params=params, timeout=7, verify=False)
+        if r_fm.status_code == 200 and r_fm.json().get("data"):
+            df_f = pd.DataFrame(r_fm.json()["data"])
+            sub = df_f[df_f["institutional_investors"].astype(str).str.contains("外資|Foreign", case=False, na=False)].sort_values("date")
+            if len(sub) >= 2:
+                oi1 = int(float(sub.iloc[-1]["long_open_interest_balance_volume"]) - float(sub.iloc[-1]["short_open_interest_balance_volume"]))
+                oi0 = int(float(sub.iloc[-2]["long_open_interest_balance_volume"]) - float(sub.iloc[-2]["short_open_interest_balance_volume"]))
+                return {"mkt_foreign_oi": oi1, "mkt_foreign_oi_chg": oi1 - oi0}
+    except Exception: pass
+    return {}
 
-    # ----------------------------------------------------
-    # 維度 1：相對大盤強弱 (Alpha) & 日K趨勢 (滿分 25 分)
-    # ----------------------------------------------------
-    # Alpha 動態分 (0 ~ 10 分)：比較近1日與近5日跑贏大盤幅度
-    s_a1 = max(0, min(5, int(round((alpha_1d + 2.5) * 1.0))))
-    s_a5 = max(0, min(5, int(round((alpha_5d + 5.0) * 0.5))))
-    s_alpha = s_a1 + s_a5
-    # 日K均線與扣抵 (0 ~ 15 分)
-    s_ma = (4 if c >= ma5 else 0) + (6 if c >= ma20 else 0) + (2 if c >= ma60 else 0) + (3 if c >= ded else 0)
-    d1_score = s_alpha + s_ma
-    breakdown.append((
-        "🛡️ 1. 相對大盤強弱(Alpha) & 日K趨勢", f"{d1_score} / 25 分",
-        f"對抗大盤Alpha：1日({alpha_1d:+.2f}%) / 5日({alpha_5d:+.2f}%) ➔ +{s_alpha}分 ｜ 均線：5MA({'+' if c>=ma5 else '-'}) / 月線({'+' if c>=ma20 else '-'}) / 扣抵({'+' if c>=ded else '-'}) ➔ +{s_ma}分"
-    ))
+def sync_market_institutional_online(fm_token=""):
+    res, now_dt = {}, pd.Timestamp.now()
+    for d_b in range(0, 7):
+        qd = (now_dt - pd.Timedelta(days=d_b)).strftime("%Y%m%d")
+        try:
+            r_sp = GLOBAL_HTTP_SESSION.get(f"https://www.twse.com.tw/rwd/zh/fund/BFI82U?response=json&dayDate={qd}", timeout=5, verify=False)
+            if r_sp.status_code == 200 and r_sp.json().get("stat") == "OK" and r_sp.json().get("data"):
+                f_a = t_a = d_a = 0.0
+                for row in r_sp.json()["data"]:
+                    t, v = str(row[0]).strip(), round(float(str(row[3]).replace(",", "")) / 1e8, 2)
+                    if "外資及陸資" in t and "不含" in t: f_a = v
+                    elif "投信" in t: t_a = v
+                    elif "自營商" in t: d_a += v
+                res.update({"mkt_spot_foreign": f_a, "mkt_spot_trust": t_a, "mkt_spot_dealer": round(d_a, 2), "mkt_chip_date": qd}); break
+        except Exception: continue
 
-    # ----------------------------------------------------
-    # 維度 2：三週期共振 (60分/5分K) & 動能指標 (滿分 25 分)
-    # ----------------------------------------------------
-    s_60m = 4
-    if tech_60m and tech_60m.get("ok"):
-        s_60m = (5 if c >= tech_60m["ma20"] else 0) +
+    m_hist = []
+    for d_b in range(0, 12):
+        qd = (now_dt - pd.Timedelta(days=d_b)).strftime("%Y%m%d")
+        try:
+            r_mg = GLOBAL_HTTP_SESSION.get(f"https://www.twse.com.tw/rwd/zh/marginTrading/MI_MARGN?response=json&date={qd}&selectType=MS", timeout=5, verify=False)
+            if r_mg.status_code == 200 and r_mg.json().get("stat") == "OK":
+                tbs = r_mg.json().get("tables", [])
+                if tbs and tbs[0].get("data"):
+                    mt = mp = st_v = sp_v = None
+                    for row in tbs[0]["data"]:
+                        nm = str(row[0]).strip()
+                        if "融資金額" in nm: mp, mt = round(float(str(row[4]).replace(",", "")) / 1e5, 2), round(float(str(row[5]).replace(",", "")) / 1e5, 2)
+                        elif "融券" in nm and "交易單位" in nm: sp_v, st_v = int(float(str(row[4]).replace(",", ""))), int(float(str(row[5]).replace(",", "")))
+                    if mt is not None:
+                        m_hist.append({"mt": mt, "mp": mp, "st": st_v, "sp": sp_v})
+                        if len(m_hist) >= 3: break
+        except Exception: continue
+
+    if m_hist:
+        lt = m_hist[0]
+        res["mkt_margin_bal"], res["mkt_margin_chg"] = lt["mt"], round(lt["mt"] - lt["mp"], 2)
+        res["mkt_margin_chg_3d"] = round(lt["mt"] - m_hist[2]["mp"], 2) if len(m_hist) >= 3 else res["mkt_margin_chg"]
+        if lt["st"] is not None: res["mkt_short_bal"], res["mkt_short_chg"] = lt["st"], lt["st"] - lt["sp"]
+
+    res.update(fetch_taifex_foreign_tx_oi_csv(fm_token))
+    return res
+
+@st.cache_data(ttl=1800)
+def auto_sync_market_chips_cached(fm_token=""):
+    cfg = load_config()
+    mkt_res = sync_market_institutional_online(fm_token)
+    if mkt_res: cfg.update(mkt_res); save_config(cfg)
+    return cfg
