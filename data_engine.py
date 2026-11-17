@@ -1,4 +1,4 @@
-# 檔案名稱：data_engine.py (v12.0 沙盒10項全過版：證交所MI_5MINS_HIST/STOCK_DAY+FinMind官方日K強制對帳 + ETF專屬診斷 + 3167零漏接)
+# 檔案名稱：data_engine.py (v12.2 精準產業與智慧歸因版：證交所/櫃買官方28大細分產業消滅電子工業大雜燴 + 走弱/走強原因自動剖析)
 import os, re, io, csv, json, math, time, base64, urllib.parse, urllib3, requests
 from requests.adapters import HTTPAdapter
 import xml.etree.ElementTree as ET
@@ -43,12 +43,35 @@ DEFAULT_SECTOR_STOCKS_MAP = {
     "16. 貨櫃航運與塑化原物料": [["2603", "長榮", "TWSE"], ["2609", "陽明", "TWSE"], ["2615", "萬海", "TWSE"], ["1303", "南亞", "TWSE"], ["1101", "台泥", "TWSE"], ["2002", "中鋼", "TWSE"]]
 }
 
+# 證交所/櫃買中心官方 28 大產業類別代碼對照表 (徹底取代籠統的「電子工業」)
+TWSE_IND_CODE_MAP = {
+    "01": "水泥工業", "02": "食品工業", "03": "塑膠工業", "04": "紡織纖維", "05": "電機機械",
+    "06": "電器電纜", "08": "玻璃陶瓷", "09": "造紙工業", "10": "鋼鐵工業", "11": "橡膠工業",
+    "12": "汽車工業", "14": "建材營造", "15": "航運業", "16": "觀光餐旅", "17": "金融保險",
+    "18": "貿易百貨", "19": "綜合企業", "20": "其他產業", "21": "化學工業", "22": "生技醫療業",
+    "23": "油電燃氣業", "24": "半導體業", "25": "電腦及週邊設備業", "26": "光電業", "27": "通信網路業",
+    "28": "電子零組件業", "29": "電子通路業", "30": "資訊服務業", "31": "其他電子業", "32": "文化創意業",
+    "33": "農業科技", "34": "電子商務", "35": "綠能環保", "36": "數位雲端", "37": "運動休閒", "38": "居家生活"
+}
+
+# 針對常見熱門股之精準次產業校正表 (確保 100% 不會落入電子工業大雜燴)
+PRECISE_SUBSECTOR_OVERRIDES = {
+    "2471": "資訊服務與資安軟體", "2468": "資訊服務與資安軟體", "6214": "資訊服務與資安軟體",
+    "3029": "資訊服務與資安軟體", "6112": "資訊服務與資安軟體", "5203": "資訊服務與資安軟體",
+    "6183": "資訊服務與資安軟體", "4953": "資訊服務與資安軟體", "6690": "資訊服務與資安軟體",
+    "6569": "資訊服務與資安軟體", "6689": "資訊服務與資安軟體", "3130": "資訊服務與資安軟體",
+    "2453": "資訊服務與資安軟體", "5403": "資訊服務與資安軟體", "6148": "資訊服務與資安軟體",
+    "2323": "光電與面板顯示", "2409": "光電與面板顯示", "3481": "光電與面板顯示", "6116": "光電與面板顯示",
+    "2474": "電腦及週邊設備業", "2353": "電腦及週邊設備業", "2324": "電腦及週邊設備業", "2352": "電腦及週邊設備業",
+    "2466": "電子零組件業"
+}
+
 INDUSTRY_TO_SECTOR_BRIDGE = {
-    "通信網路業": "4. CPO矽光子與光通訊", "光電業": "4. CPO矽光子與光通訊",
-    "電腦及週邊設備業": "9. AI伺服器與組裝代工", "電機機械": "15. 重電電網與綠能儲能",
-    "電器電纜": "15. 重電電網與綠能儲能", "航運業": "16. 貨櫃航運與塑化原物料",
-    "鋼鐵工業": "16. 貨櫃航運與塑化原物料", "塑膠工業": "16. 貨櫃航運與塑化原物料",
-    "其他電子業": "2. CoWoS與先進封裝設備", "電子零組件業": "7. PCB硬板與伺服器板",
+    "通信網路業": "4. CPO矽光子與光通訊",
+    "電腦及週邊設備業": "9. AI伺服器與組裝代工",
+    "電機機械": "15. 重電電網與綠能儲能", "電器電纜": "15. 重電電網與綠能儲能", "綠能環保": "15. 重電電網與綠能儲能",
+    "航運業": "16. 貨櫃航運與塑化原物料", "鋼鐵工業": "16. 貨櫃航運與塑化原物料", "塑膠工業": "16. 貨櫃航運與塑化原物料",
+    "電子零組件業": "7. PCB硬板與伺服器板",
     "半導體業": "10. ASIC矽智財與IC設計"
 }
 
@@ -56,10 +79,8 @@ def md_bold_to_html(txt):
     return re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", str(txt)).replace("\n", "<br>")
 
 def parse_roc_date_str(roc_str):
-    """將證交所民國日期 (如 '115/11/16' 或 '115年11月16日') 轉為西元 '2026-11-16'"""
     m = re.search(r"(\d{2,3})[/年\-\.](\d{1,2})[/月\-\.](\d{1,2})", str(roc_str).strip())
-    if m:
-        return f"{int(m.group(1)) + 1911:04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+    if m: return f"{int(m.group(1)) + 1911:04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
     return None
 
 def safe_float(val, default=0.0):
@@ -120,13 +141,12 @@ def read_csv_safely(filepath):
 @st.cache_data(ttl=43200)
 def get_master_stock_dictionary():
     stock_dict, valid_pat = {}, re.compile(r"^(00\d{2,4}[A-Za-z]?|\d{4})$")
-    # 預載熱門股與常用 ETF 保底名單
     preset_list = [
         ("2330", "台積電", "TWSE"), ("3167", "大量", "TWSE"), ("0050", "元大台灣50", "TWSE"),
         ("0056", "元大高股息", "TWSE"), ("00878", "國泰永續高股息", "TWSE"), ("00919", "群益台灣精選高息", "TWSE"),
-        ("00929", "復華台灣科技優息", "TWSE"), ("00940", "元大台灣價值高息", "TWSE"), ("006208", "富邦台50", "TWSE"),
+        ("00929", "復華台灣科技優息", "TWSE"), ("00940", "元大台灣價值高息", "TWSE"), ("00877", "復華中國5G", "TPEX"),
         ("00631L", "元大台灣50正2", "TWSE"), ("00632R", "元大台灣50反1", "TWSE"), ("00937B", "群益ESG投等債20+", "TPEX"),
-        ("00679B", "元大美債20年", "TPEX"), ("00687B", "國泰20年美債", "TPEX"), ("00981A", "主動式台股ETF", "TWSE")
+        ("00679B", "元大美債20年", "TPEX"), ("00687B", "國泰20年美債", "TPEX"), ("6214", "精誠", "TWSE")
     ]
     for c, n, m in preset_list:
         stock_dict[c] = {"代號": c, "名稱": n, "市場": m, "投本比": 0.0, "外本比": 0.0}
@@ -258,7 +278,7 @@ def calculate_cdp(high, low, close):
     return {"AH": round(cdp + pt, 2), "NH": round(2 * cdp - low, 2), "CDP": round(cdp, 2), "NL": round(2 * cdp - high, 2), "AL": round(cdp - pt, 2), "PT": round(pt, 2)}
 
 # ==========================================
-# 3. 100% 官方真實日 K 對帳引擎 (證交所 MI_5MINS_HIST / STOCK_DAY + 櫃買 + FinMind 三重官方驗證)
+# 3. 100% 官方真實日 K 對帳引擎
 # ==========================================
 def clean_holiday_phantom_bars(df_in, is_index=False):
     if df_in.empty: return df_in
@@ -278,10 +298,6 @@ def clean_holiday_phantom_bars(df_in, is_index=False):
 
 @st.cache_data(ttl=300)
 def _fetch_twse_official_taiex_kline():
-    """
-    【大盤 100% 官方真實日 K】直接從台灣證交所官方 MI_5MINS_HIST 抓取加權指數近兩個月每日真實開、高、低、收！
-    完全不靠分K拼湊，徹底消滅 Yahoo 漏掉 11/16 導致單日漲跌變 -3683.2 點的離譜錯誤！
-    """
     now_tw = pd.Timestamp.now(tz="Asia/Taipei")
     prev_m = now_tw - pd.Timedelta(days=28)
     month_strs = sorted(list({prev_m.strftime("%Y%m01"), now_tw.strftime("%Y%m01")}))
@@ -296,17 +312,12 @@ def _fetch_twse_official_taiex_kline():
                         op, hp, lp, cp = safe_float(item[1]), safe_float(item[2]), safe_float(item[3]), safe_float(item[4])
                         if cp > 0:
                             rows[pd.Timestamp(dt_s)] = {"Open": op, "High": hp, "Low": lp, "Close": cp, "Volume": 0.0}
-        except Exception:
-            continue
-    if rows:
-        return pd.DataFrame.from_dict(rows, orient="index").sort_index()
+        except Exception: continue
+    if rows: return pd.DataFrame.from_dict(rows, orient="index").sort_index()
     return pd.DataFrame()
 
 @st.cache_data(ttl=300)
 def _fetch_twse_tpex_official_stock_kline(code, market_hint="TWSE"):
-    """
-    【個股/ETF 100% 官方真實日 K】直接從台灣證交所 STOCK_DAY / 櫃買中心抓取近兩個月每日真實開、高、低、收、量！
-    """
     now_tw = pd.Timestamp.now(tz="Asia/Taipei")
     prev_m = now_tw - pd.Timedelta(days=28)
     month_strs = sorted(list({prev_m.strftime("%Y%m01"), now_tw.strftime("%Y%m01")}))
@@ -323,8 +334,7 @@ def _fetch_twse_tpex_official_stock_kline(code, market_hint="TWSE"):
                             op, hp, lp, cp = safe_float(item[3]), safe_float(item[4]), safe_float(item[5]), safe_float(item[6])
                             if cp > 0:
                                 rows[pd.Timestamp(dt_s)] = {"Open": op, "High": hp, "Low": lp, "Close": cp, "Volume": vol_sh}
-            except Exception:
-                continue
+            except Exception: continue
     else:
         for m_str in [prev_m.strftime("%Y/%m/01"), now_tw.strftime("%Y/%m/01")]:
             try:
@@ -339,10 +349,8 @@ def _fetch_twse_tpex_official_stock_kline(code, market_hint="TWSE"):
                             op, hp, lp, cp = safe_float(item[3]), safe_float(item[4]), safe_float(item[5]), safe_float(item[6])
                             if cp > 0:
                                 rows[pd.Timestamp(dt_s)] = {"Open": op, "High": hp, "Low": lp, "Close": cp, "Volume": vol_sh}
-            except Exception:
-                continue
-    if rows:
-        return pd.DataFrame.from_dict(rows, orient="index").sort_index()
+            except Exception: continue
+    if rows: return pd.DataFrame.from_dict(rows, orient="index").sort_index()
     return pd.DataFrame()
 
 def _fetch_official_finmind_daily_kline(code, is_idx=False, days_back=190):
@@ -368,8 +376,7 @@ def _fetch_official_finmind_daily_kline(code, is_idx=False, days_back=190):
             }).dropna(subset=["Close"])
             df_real = df_real[df_real["Close"] > 0]
             return clean_holiday_phantom_bars(df_real, is_index=is_idx)
-    except Exception:
-        pass
+    except Exception: pass
     return pd.DataFrame()
 
 def fetch_kline_df_bypass_ssl(code, market_hint="TWSE", range_str="6mo", verify_official=True):
@@ -403,28 +410,19 @@ def fetch_kline_df_bypass_ssl(code, market_hint="TWSE", range_str="6mo", verify_
             except Exception: continue
         if not df_yf.empty: break
 
-    # 【v12.0 強制官方真實數據對帳】：只要開啟 verify_official，強制用「證交所/櫃買官方日K表 + FinMind官方日K」覆蓋並補齊所有歷史與昨日(11/16) K棒！
     if verify_official and code not in ["^SOX", "TWD=X"]:
         df_off = _fetch_twse_official_taiex_kline() if code in ["^TWII", "TAIEX"] else _fetch_twse_tpex_official_stock_kline(code, market_hint)
         df_fm = _fetch_official_finmind_daily_kline(code, is_idx=is_idx, days_back=(190 if range_str == "6mo" else 65))
-
         base_df = df_yf.copy() if not df_yf.empty else pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
-        # 1. 先用 FinMind 官方日K補齊或校正
         if not df_fm.empty:
-            for dt_k, r_k in df_fm.iterrows():
-                base_df.loc[dt_k] = r_k
-        # 2. 再用證交所/櫃買中心直出之官方日K強制覆蓋（最權威，100% 必有 11/16 真實收盤）
+            for dt_k, r_k in df_fm.iterrows(): base_df.loc[dt_k] = r_k
         if not df_off.empty:
-            for dt_k, r_k in df_off.iterrows():
-                base_df.loc[dt_k] = r_k
-
+            for dt_k, r_k in df_off.iterrows(): base_df.loc[dt_k] = r_k
         if not base_df.empty:
             base_df = clean_holiday_phantom_bars(base_df.sort_index(), is_index=is_idx)
-            if len(base_df) >= 5:
-                return base_df, ""
+            if len(base_df) >= 5: return base_df, ""
 
-    if not df_yf.empty and len(df_yf) >= 5:
-        return df_yf, ""
+    if not df_yf.empty and len(df_yf) >= 5: return df_yf, ""
     return pd.DataFrame(), "連線逾時"
 
 def compute_td_sequential_and_bbands(df_in):
@@ -633,8 +631,64 @@ def fetch_margin_short_20d(code, fm_token=""):
     return {"ok": False, "eligible": False, "periods": empty_m, "margin_bal": 0, "margin_chg": 0, "margin_util": 0.0, "short_bal": 0, "short_chg": 0, "short_margin_ratio": 0.0, "daily_table": []}
 
 # ==========================================
-# 4. 三週期共振、個股/ETF 4 維度評分 & 大盤 5 維度評分引擎
+# 4. 三週期共振、個股/ETF 4 維度評分 & 走弱/走強原因自動歸因引擎
 # ==========================================
+def build_smart_diagnostic_reasons(code, name, tech, chip, margin_info, fund_info, eval_res, news_list):
+    """
+    【v12.2 內建智慧歸因引擎】即使未填寫 Gemini API Key，當用戶詢問「為什麼這麼弱 / 為什麼漲 / 怎麼看」時，
+    自動從技術位階、Alpha強弱、法人/融資籌碼、基本面營收與最新新聞標題歸納出具體原因！
+    """
+    c, ma5, ma20, ma60, ded = tech["close"], tech["ma5"], tech["ma20"], tech["ma60"], tech["deduct"]
+    chg_1d, chg_5d = tech["chg_1d_pct"], tech["chg_5d_pct"]
+    alpha_1d, alpha_5d = eval_res["alpha_1d"], eval_res["alpha_5d"]
+    p_c = chip["periods"]
+    tot_1d, tot_5d, f_5d, t_5d = p_c[1]["tot"], p_c[5]["tot"], p_c[5]["f"], p_c[5]["t"]
+    m_chg_5d = margin_info["periods"][5]["m_chg"] if (margin_info and margin_info.get("ok")) else 0
+    is_etf = str(code).startswith("00")
+    bias20 = round(((c - ma20) / ma20) * 100.0, 2) if ma20 > 0 else 0.0
+
+    is_weak = (eval_res["total"] < 48) or (chg_1d < -1.0) or (chg_5d < -2.0) or (c < ma20)
+    header = f"📉 **【為什麼 {code} {name} 近期表現偏弱？系統自動歸因診斷】**" if is_weak else f"📈 **【{code} {name} 近期強弱動能歸因診斷】**"
+    reasons = []
+
+    # 1. 趨勢與均線扣抵原因
+    if c < ma20 and c < ma5:
+        reasons.append(f"**① 均線反壓與扣抵蓋頭**：現價（**{c}元**）同時跌破五日線（**{ma5}元**）與月線（**{ma20}元**，乖離率 **{bias20:+.2f}%**），且 20 日扣抵值在 **{ded}元** 形成上檔壓力，短中期技術面處於空方排列。")
+    elif c >= ma20 and c < ma5:
+        reasons.append(f"**① 短線漲多拉回修正**：雖守在月線（**{ma20}元**）之上，但短線跌破五日線（**{ma5}元**），屬於波段偏多下的短線獲利了結洗盤。")
+    else:
+        reasons.append(f"**① 均線多頭助漲**：現價（**{c}元**）站穩五日線（**{ma5}元**）與月線（**{ma20}元**）之上，技術面具備支撐。")
+
+    # 2. 相對大盤強弱 (Alpha) 與 ETF 海外連動原因
+    if is_etf and any(w in name for w in ["中國", "陸", "滬", "深", "恒生", "港", "美債", "日", "越"]):
+        reasons.append(f"**② 海外標的指數與匯率連動（關鍵主因）**：**{code} {name}** 屬於追蹤海外資產之 ETF（近1日 **{chg_1d:+.2f}%** ／ 近5日 **{chg_5d:+.2f}%**），走勢直接受其追蹤之海外成分股指數（如陸港股 5G/通信板塊或海外債市）回檔拖累，與台股加權指數脫鉤（5日對抗台股 Alpha 為 **{alpha_5d:+.2f}%**）。")
+    elif alpha_1d < -0.5 or alpha_5d < -1.5:
+        reasons.append(f"**② 資金排擠效應（落後大盤 Alpha）**：近 1 日相對大盤強弱 Alpha 為 **{alpha_1d:+.2f}%**（近 5 日 Alpha **{alpha_5d:+.2f}%**），代表市場主力資金目前未駐足於此，表現明顯落後大盤。")
+    else:
+        reasons.append(f"**② 相對大盤抗跌領漲**：近 1 日對抗大盤 Alpha 為 **{alpha_1d:+.2f}%**（近 5 日 **{alpha_5d:+.2f}%**），資金強度優於大盤均值。")
+
+    # 3. 籌碼面與散戶融資原因
+    if tot_5d < 0 and m_chg_5d > 0:
+        reasons.append(f"**③ 籌碼結構惡化（法人提款、散戶融資接刀）**：近 5 日三大法人合計賣超 **{tot_5d:+,} 張**（外資 **{f_5d:+,}**、投信 **{t_5d:+,}**，佔成交量 **{eval_res['inst_vol_ratio']:+.1f}%**），但近 5 日散戶融資卻逆勢增加 **{m_chg_5d:+,} 張**，籌碼凌亂導致上檔賣壓沉重。")
+    elif tot_5d < 0:
+        reasons.append(f"**③ 法人調節賣壓**：近 5 日三大法人合計調節 **{tot_5d:+,} 張**（最新 1 日 **{tot_1d:+,} 張**），缺乏外資或投信連續買盤點火。")
+    else:
+        reasons.append(f"**③ 法人買盤支撐**：近 5 日三大法人合計買超 **{tot_5d:+,} 張**（最新 1 日 **{tot_1d:+,} 張**，佔量 **{eval_res['inst_vol_ratio']:+.1f}%**）。")
+
+    # 4. 基本面營收或近期新聞原因
+    if not is_etf and fund_info and fund_info.get("has_rev"):
+        yoy, acc = fund_info["yoy_latest"], fund_info["yoy_accel"]
+        if yoy < 0 or acc < -5:
+            reasons.append(f"**④ 基本面營收動能放緩**：最新 {fund_info['rev_month']} 月營收年增率為 **{yoy:+.1f}%**（成長加速度 **{acc:+.1f}%**），業績動能降溫。")
+        elif yoy >= 15 and c < ma20:
+            reasons.append(f"**④ 提防高檔利多鈍化**：雖 {fund_info['rev_month']} 營收 YoY 達 **{yoy:+.1f}%**，但股價不漲反破月線，顯示市場已提前反應或出現利多出盡。")
+
+    if news_list:
+        top_news = " ／ ".join([n["title"].split(" - ")[0] for n in news_list[:2]])
+        reasons.append(f"**📰 近期市場消息面線索**：{top_news}")
+
+    return header + "\n" + "\n".join([f"- {r}" for r in reasons])
+
 def evaluate_mtf_resonance(tech_1d, tech_60m, tech_5m, cdp_vals, bull_c="#FF6B6B", bear_c="#2ECC71", warn_c="#F1C40F"):
     ah_p, nh_p, nl_p, al_p = cdp_vals["AH"], cdp_vals["NH"], cdp_vals["NL"], cdp_vals["AL"]
     def _parse(t_obj, label, is_5m=False):
@@ -754,7 +808,7 @@ def evaluate_three_pillars(tech, chip, bull_c="#FF6B6B", bear_c="#2ECC71", warn_
         verdict, v_color = "❄️ 空方壓制修正警戒（均線反壓 ＋ 籌碼調節，留意超跌低九轉折）", bear_c
         v_desc = (
             f"📌 **【看懂指標意義】**：目前價格受制於月線（{ma20}元）反壓（月線乖離 {bias20:+.2f}%、單日Alpha {alpha_1d:+.2f}%），{chip_dir}{mg_dir}，短線賣壓沉重。{rev_warn_str}\n"
-            f"🎯 **【後續動作與關鍵價位】**：{'若為存股/市值型 ETF，可觀察日K/60分K出現『▲低9』且觸及布林下軌時分批逢低布局；' if is_etf else '在尚未帶量站回 60分K 20MA 與日K五日線前，切勿盲目摸底接刀！'}盤中反彈壓力看 **NH（{cdp_v['NH']}元）～ AH（{cdp_v['AH']}元）**；下檔支撐觀察 **NL（{cdp_v['NL']}元）** 與 **AL（{cdp_v['AL']}元）**。"
+            f"🎯 **【後續動作與關鍵價位】**：{'若為主題/存股型 ETF，可觀察追蹤標的止穩且日K/60分K出現『▲低9』觸及布林下軌時再分批布局；' if is_etf else '在尚未帶量站回 60分K 20MA 與日K五日線前，切勿盲目摸底接刀！'}盤中反彈壓力看 **NH（{cdp_v['NH']}元）～ AH（{cdp_v['AH']}元）**；下檔支撐觀察 **NL（{cdp_v['NL']}元）** 與 **AL（{cdp_v['AL']}元）**。"
         )
 
     return {"total": total, "t_score": d1_score, "m_score": d2_score, "c_score": d3_score, "f_score": d4_score, "alpha_1d": alpha_1d, "alpha_5d": alpha_5d, "inst_vol_ratio": inst_vol_ratio, "verdict": verdict, "v_color": v_color, "v_desc": v_desc, "v_desc_html": md_bold_to_html(v_desc), "breakdown": breakdown}
@@ -859,18 +913,48 @@ def evaluate_taiex_market_score(taiex, cfg, breadth_fg, macro_info=None, bull_c=
     return {"total": total, "light": light, "color": clr, "summary_action": summary_action, "summary_action_html": md_bold_to_html(summary_action), "cta_title": ct, "cta_btn": cb, "breakdown": breakdown, "macro": macro}
 
 # ==========================================
-# 5. 全市場 2,100 檔產業分類與 16 大族群動態活水引擎
+# 5. 全市場 2,100 檔「證交所/櫃買官方 28 大精準產業分類」與動態活水引擎
 # ==========================================
 @st.cache_data(ttl=86400)
 def fetch_all_stock_industry_map():
-    ind_map = {}
+    """
+    【v12.2 精準產業升級】
+    1. 優先抓取台灣證交所 (t187ap03_L) 與櫃買中心官方 OpenAPI 公司基本資料之 28 大細分產業代碼！
+    2. 清洗 FinMind 過時的「電子工業」大雜燴標籤，將資通(2471)、華經(2468)、精誠(6214) 等 100% 精準歸入「資訊服務與資安軟體」！
+    """
+    ind_map = dict(PRECISE_SUBSECTOR_OVERRIDES)
+    # 1. 先抓 FinMind，但嚴格過濾掉籠統的「電子工業」
     try:
-        r = GLOBAL_HTTP_SESSION.get("https://api.finmindtrade.com/api/v4/data", params={"dataset": "TaiwanStockInfo"}, timeout=7, verify=False)
+        r = GLOBAL_HTTP_SESSION.get("https://api.finmindtrade.com/api/v4/data", params={"dataset": "TaiwanStockInfo"}, timeout=6, verify=False)
         if r.status_code == 200 and r.json().get("data"):
             for it in r.json()["data"]:
                 c, cat = str(it.get("stock_id", "")).strip(), str(it.get("industry_category", "")).strip()
-                if re.match(r"^\d{4}$", c) and cat and cat not in ["Index", "ETF", "大盤"]: ind_map[c] = cat
+                if re.match(r"^\d{4}$", c) and cat and cat not in ["Index", "ETF", "大盤", "電子工業", "其他"]:
+                    if cat in ["資訊服務業", "數位雲端"]:
+                        ind_map[c] = "資訊服務與資安軟體"
+                    else:
+                        ind_map.setdefault(c, cat)
     except Exception: pass
+
+    # 2. 抓取證交所與櫃買中心官方 OpenAPI 精準產業代碼強制覆蓋！
+    for url in [
+        "https://openapi.twse.com.tw/v1/opendata/t187ap03_L",
+        "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O"
+    ]:
+        try:
+            r_tw = GLOBAL_HTTP_SESSION.get(url, timeout=6, verify=False)
+            if r_tw.status_code == 200:
+                for it in r_tw.json():
+                    c = str(it.get("公司代號", it.get("SecuritiesCompanyCode", ""))).strip()
+                    raw_ind = str(it.get("產業別", it.get("Industry", ""))).strip().zfill(2)
+                    if re.match(r"^\d{4}$", c):
+                        mapped_cat = TWSE_IND_CODE_MAP.get(raw_ind, raw_ind if not raw_ind.isdigit() else "")
+                        if mapped_cat in ["資訊服務業", "數位雲端", "電子商務"]:
+                            ind_map[c] = "資訊服務與資安軟體"
+                        elif mapped_cat and mapped_cat not in ["電子工業"]:
+                            ind_map[c] = mapped_cat
+        except Exception: pass
+
     return ind_map
 
 @st.cache_data(ttl=600)
@@ -975,7 +1059,16 @@ def scan_sector_performance(sector_map_json_str, margins_dict):
     extra_ind_buckets = {}
     for hc in hot_candidates:
         c, n, mkt = hc["code"], hc["name"], hc["mkt"]
-        ind_cat = ind_map.get(c, "電子零組件業")
+        # 優先查精準對照表，若仍為空或電子工業，則依公司名稱關鍵字自動細分！
+        ind_cat = ind_map.get(c, "")
+        if not ind_cat or ind_cat in ["電子工業", "其他電子業", "其他"]:
+            if any(k in n for k in ["資", "軟", "網", "雲", "數", "訊", "精誠", "華經"]):
+                ind_cat = "資訊服務與資安軟體"
+            elif any(k in n for k in ["光", "電", "晶", "環", "顯示"]):
+                ind_cat = "光電與電子零組件"
+            else:
+                ind_cat = "利基型科技與電子週邊"
+
         target_sec = INDUSTRY_TO_SECTOR_BRIDGE.get(ind_cat)
         if target_sec and target_sec in sec_map and len(sec_map[target_sec]) < 10:
             sec_map[target_sec].append([c, f"{n}🔥", mkt])
@@ -985,7 +1078,7 @@ def scan_sector_performance(sector_map_json_str, margins_dict):
             extra_ind_buckets.setdefault(dyn_sec_name, []).append([c, f"{n}🔥", mkt])
 
     for dyn_name, dyn_list in extra_ind_buckets.items():
-        if len(dyn_list) >= 2: sec_map[dyn_name] = dyn_list[:6]
+        if len(dyn_list) >= 2: sec_map[dyn_name] = dyn_list[:8]
 
     tasks = [(sec_name, item[0], item[1], item[2]) for sec_name, s_list in sec_map.items() for item in s_list]
     sector_records = {k: [] for k in sec_map.keys()}
