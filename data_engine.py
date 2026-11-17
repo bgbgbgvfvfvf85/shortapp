@@ -1,4 +1,4 @@
-# 檔案名稱：data_engine.py (v11.2 實戰綜合總結引擎 + AH/NH/NL/AL四價位 + 極速精簡版)
+# 檔案名稱：data_engine.py (v11.5 三次沙盒終極防彈版：修復證交所X0.00除權息解析 + 補回FinMind備援 + 債券ETF極速路由)
 import os, re, io, csv, json, math, time, base64, urllib.parse, urllib3, requests
 from requests.adapters import HTTPAdapter
 import xml.etree.ElementTree as ET
@@ -147,7 +147,7 @@ def sync_taifex_futures_online():
 def init_sample_csvs():
     os.makedirs(DATA_DIR, exist_ok=True)
     if not os.path.exists(QUOTES_FILE):
-        pd.DataFrame([["2330", "台積電", "TWSE", 0.0, 0.0], ["0050", "元大台灣50", "TWSE", 0.0, 0.0]], columns=["代號", "名稱", "市場", "投本比", "外本比"]).to_csv(QUOTES_FILE, index=False, encoding="utf-8-sig")
+        pd.DataFrame([["2330", "台積電", "TWSE", 0.0, 0.0], ["0050", "元大台灣50", "TWSE", 0.0, 0.0], ["00937B", "群益ESG投等債20+", "TPEX", 0.0, 0.0]], columns=["代號", "名稱", "市場", "投本比", "外本比"]).to_csv(QUOTES_FILE, index=False, encoding="utf-8-sig")
     if not os.path.exists(FUTURES_FILE):
         pd.DataFrame([["2330", "台積電期", "有", "有", 13.50]], columns=["代號", "期貨簡稱", "標準期貨", "小型期貨", "保證金比例"]).to_csv(FUTURES_FILE, index=False, encoding="utf-8-sig")
     if not os.path.exists(CB_FILE):
@@ -214,7 +214,7 @@ def calculate_cdp(high, low, close):
     return {"AH": round(cdp + pt, 2), "NH": round(2 * cdp - low, 2), "CDP": round(cdp, 2), "NL": round(2 * cdp - high, 2), "AL": round(cdp - pt, 2), "PT": round(pt, 2)}
 
 # ==========================================
-# 3. K線、三週期指標與基本面營收/外本比抓取引擎
+# 3. K線、三週期指標與基本面營收/外本比抓取引擎 (含 FinMind 自動備援)
 # ==========================================
 def clean_holiday_phantom_bars(df_in, is_index=False):
     if df_in.empty: return df_in
@@ -272,10 +272,14 @@ def calc_kd_rsi_macd(hist):
     delta = hist["Close"].diff()
     rs = delta.clip(lower=0).ewm(alpha=1/14, adjust=False).mean() / ((-delta.clip(upper=0)).ewm(alpha=1/14, adjust=False).mean() + 1e-9)
     rsi14 = round(float((100 - (100 / (1 + rs))).iloc[-1]), 1) if len(hist) >= 15 else 50.0
-    return round(k_v[-1], 1), round(d_v[-1], 1), round(k_v[-2], 1), round(d_v[-2], 1), round(float(osc.iloc[-1]), 2), round(float(osc.iloc[-2]), 2) if len(osc)>=2 else 0.0, rsi14
+    k_prev = round(k_v[-2], 1) if len(k_v) >= 2 else 50.0
+    d_prev = round(d_v[-2], 1) if len(d_v) >= 2 else 50.0
+    osc_prev = round(float(osc.iloc[-2]), 2) if len(osc) >= 2 else 0.0
+    return round(k_v[-1], 1), round(d_v[-1], 1), k_prev, d_prev, round(float(osc.iloc[-1]), 2), osc_prev, rsi14
 
 def fetch_kline_df_bypass_ssl(code, market_hint="TWSE", range_str="6mo"):
     is_idx = code in ["^TWII", "TAIEX", "^SOX", "TWD=X"]
+    if str(code).endswith("B"): market_hint = "TPEX"
     if code == "^TWII": symbols = ["%5ETWII"]
     elif code == "^SOX": symbols = ["%5ESOX"]
     elif code == "TWD=X": symbols = ["TWD%3DX"]
@@ -289,17 +293,36 @@ def fetch_kline_df_bypass_ssl(code, market_hint="TWSE", range_str="6mo"):
                     res = resp.json().get("chart", {}).get("result", [])
                     if res and res[0].get("timestamp") and "close" in res[0].get("indicators", {}).get("quote", [{}])[0]:
                         ts, q = res[0]["timestamp"], res[0]["indicators"]["quote"][0]
-                        df_tmp = pd.DataFrame({"Open": q.get("open", q["close"]), "High": q.get("high", q["close"]), "Low": q.get("low", q["close"]), "Close": q["close"], "Volume": q.get("volume", [0]*len(ts))}, index=pd.to_datetime(ts, unit="s", utc=True).tz_convert("Asia/Taipei").normalize())
+                        tz_target = "America/New_York" if code == "^SOX" else "Asia/Taipei"
+                        dt_idx = pd.to_datetime(ts, unit="s", utc=True).tz_convert(tz_target).normalize().tz_localize(None)
+                        df_tmp = pd.DataFrame({"Open": q.get("open", q["close"]), "High": q.get("high", q["close"]), "Low": q.get("low", q["close"]), "Close": q["close"], "Volume": q.get("volume", [0]*len(ts))}, index=dt_idx)
                         df_tmp = df_tmp[~df_tmp.index.duplicated(keep="last")].dropna(subset=["Close"])
                         for c in ["Open", "High", "Low"]: df_tmp[c] = df_tmp[c].fillna(df_tmp["Close"])
                         df_tmp["Volume"] = df_tmp["Volume"].fillna(0)
                         df_tmp = clean_holiday_phantom_bars(df_tmp, is_index=is_idx)
                         if len(df_tmp) >= 5: return df_tmp, ""
             except Exception: continue
+
+    # 【v11.5 補回】當 Yahoo 短暫限流時，自動無縫切換 FinMind 備援
+    if code not in ["^SOX", "TWD=X"]:
+        try:
+            start_dt = (pd.Timestamp.now() - pd.Timedelta(days=190 if range_str == "6mo" else 75)).strftime("%Y-%m-%d")
+            resp = GLOBAL_HTTP_SESSION.get("https://api.finmindtrade.com/api/v4/data", params={"dataset": "TaiwanStockPrice", "data_id": "TAIEX" if is_idx else code, "start_date": start_dt}, timeout=6, verify=False)
+            if resp.status_code == 200 and resp.json().get("data"):
+                df_fm = pd.DataFrame(resp.json()["data"])
+                df_fm["Date"] = pd.to_datetime(df_fm["date"]).dt.normalize()
+                df_fm = df_fm.set_index("Date")
+                df_fm = df_fm[~df_fm.index.duplicated(keep="last")]
+                v_col = "Trading_Volume" if "Trading_Volume" in df_fm.columns else ("volume" if "volume" in df_fm.columns else None)
+                df_tmp = pd.DataFrame({"Open": df_fm["open"].astype(float), "High": df_fm["max"].astype(float), "Low": df_fm["min"].astype(float), "Close": df_fm["close"].astype(float), "Volume": df_fm[v_col].astype(float) if v_col else 0.0}).dropna(subset=["Close"])
+                df_tmp = clean_holiday_phantom_bars(df_tmp, is_index=is_idx)
+                if len(df_tmp) >= 5: return df_tmp, ""
+        except Exception: pass
     return pd.DataFrame(), "連線逾時"
 
 @st.cache_data(ttl=180)
 def fetch_intraday_kline_full(code, market_hint="TWSE", interval="5m"):
+    if str(code).endswith("B"): market_hint = "TPEX"
     range_str, ts_b = ("5d" if interval == "5m" else "1mo"), int(time.time() // 180)
     for sfx in ([".TWO", ".TW"] if market_hint == "TPEX" else [".TW", ".TWO"]):
         for host in ["query2.finance.yahoo.com", "query1.finance.yahoo.com"]:
@@ -310,10 +333,11 @@ def fetch_intraday_kline_full(code, market_hint="TWSE", interval="5m"):
                     if res and res[0].get("timestamp"):
                         ts, q = res[0]["timestamp"], res[0]["indicators"]["quote"][0]
                         dt_idx = pd.to_datetime(ts, unit="s", utc=True).tz_convert("Asia/Taipei")
-                        df_i = pd.DataFrame({"DateStr": dt_idx.strftime("%m/%d %H:%M"), "ShortDate": dt_idx.strftime("%m/%d %H:%M"), "Open": q.get("open", q["close"]), "High": q.get("high", q["close"]), "Low": q.get("low", q["close"]), "Close": q["close"], "Volume": q.get("volume", [0]*len(ts))}).dropna(subset=["Close"])
+                        hhmm = dt_idx.hour * 100 + dt_idx.minute
+                        df_i = pd.DataFrame({"DateStr": dt_idx.strftime("%m/%d %H:%M"), "ShortDate": dt_idx.strftime("%m/%d %H:%M"), "hhmm": hhmm, "Open": q.get("open", q["close"]), "High": q.get("high", q["close"]), "Low": q.get("low", q["close"]), "Close": q["close"], "Volume": q.get("volume", [0]*len(ts))}).dropna(subset=["Close"])
                         for c in ["Open", "High", "Low"]: df_i[c] = df_i[c].fillna(df_i["Close"])
                         df_i["Volume"] = (df_i["Volume"].fillna(0) / 1000.0).round(0)
-                        df_i = df_i[df_i["Volume"] > 0].reset_index(drop=True)
+                        df_i = df_i[(df_i["Volume"] > 0) & (df_i["hhmm"] >= 900) & (df_i["hhmm"] <= 1335)].reset_index(drop=True)
                         if len(df_i) >= 15:
                             df_i = compute_td_sequential_and_bbands(df_i)
                             k_v, d_v, _, _, osc_v, _, rsi_v = calc_kd_rsi_macd(df_i)
@@ -335,11 +359,16 @@ def fetch_intraday_kline_full(code, market_hint="TWSE", interval="5m"):
 
 @st.cache_data(ttl=300)
 def fetch_technical_indicators(code, market_hint="TWSE"):
+    if str(code).endswith("B"): market_hint = "TPEX"
     hist, err_msg = fetch_kline_df_bypass_ssl(code, market_hint, range_str="6mo")
     if hist.empty or len(hist) < 5: return {"ok": False, "err_msg": err_msg}
     hist = compute_td_sequential_and_bbands(hist)
     lt = hist.iloc[-1]
     cp, hp, lp = round(float(lt["Close"]), 2), round(float(lt["High"]), 2), round(float(lt["Low"]), 2)
+    if abs(hp - lp) < 1e-4 and len(hist) >= 2:
+        pv = hist.iloc[-2]
+        hr = max(0.5, round((float(pv["High"]) - float(pv["Low"])) * 0.5, 2))
+        hp, lp = round(cp + hr, 2), round(max(0.01, cp - hr), 2)
     prev_1d = float(hist["Close"].iloc[-2]) if len(hist) >= 2 else cp
     prev_5d = float(hist["Close"].iloc[-6]) if len(hist) >= 6 else prev_1d
     chg_1d_pct = round(((cp - prev_1d) / prev_1d) * 100.0, 2) if prev_1d > 0 else 0.0
@@ -505,8 +534,8 @@ def evaluate_three_pillars(tech, chip, bull_c="#FF6B6B", bear_c="#2ECC71", warn_
 
     p_c = chip["periods"]
     tot_1d, tot_3d, tot_5d, t_5d = p_c[1]["tot"], p_c[3]["tot"], p_c[5]["tot"], p_c[5]["t"]
-    inst_vol_ratio = round((tot_5d / vol_5d_lots) * 100.0, 2)
-    trust_vol_ratio = round((t_5d / vol_5d_lots) * 100.0, 2)
+    inst_vol_ratio = max(-99.9, min(99.9, round((tot_5d / vol_5d_lots) * 100.0, 2)))
+    trust_vol_ratio = max(-99.9, min(99.9, round((t_5d / vol_5d_lots) * 100.0, 2)))
     f_hold_chg = fund_info.get("foreign_hold_chg_5d", 0.0) if fund_info else 0.0
 
     s_conc = max(0, min(12, int(round(6.0 + inst_vol_ratio * 0.35 + (3.0 if trust_vol_ratio >= 3.0 else (1.5 if t_5d > 0 else 0.0)) + (2.0 if f_hold_chg > 0.2 else 0.0)))))
@@ -542,34 +571,29 @@ def evaluate_three_pillars(tech, chip, bull_c="#FF6B6B", bear_c="#2ECC71", warn_
 
     total = max(0, min(100, d1_score + d2_score + d3_score + d4_score))
 
-    # 產出白話「實戰總結論與操作應對指南」
     chip_dir = f"三大法人近5日買超 {tot_5d:+,} 張（最新1日 {tot_1d:+,} 張，佔成交量 {inst_vol_ratio:+.1f}%）" if tot_5d > 0 else f"三大法人近5日調節 {tot_5d:+,} 張（最新1日 {tot_1d:+,} 張，佔成交量 {inst_vol_ratio:+.1f}%）"
     mg_dir = f"且5日融資減少 {abs(m_chg_5d):,} 張（籌碼流向法人安定）" if m_chg_5d < 0 else (f"惟5日融資增加 {m_chg_5d:,} 張（留意散戶浮額）" if m_chg_5d > 0 else "")
 
     if total >= 70:
-        verdict = "🔥 機構級多方強勢共振（跑贏大盤 Alpha ＋ 均線助漲 ＋ 法人控盤）"
-        v_color = bull_c
+        verdict, v_color = "🔥 機構級多方強勢共振（跑贏大盤 Alpha ＋ 均線助漲 ＋ 法人控盤）", bull_c
         v_desc = (
             f"📌 **【看懂指標意義】**：目前股價站上月線（{ma20}元）且強於大盤（單日Alpha {alpha_1d:+.2f}%），{chip_dir}{mg_dir}。{rev_warn_str}\n"
             f"🎯 **【後續動作與關鍵價位】**：大方向屬多頭順風，切忌在急拉衝高至 **NH常態壓力（{cdp_v['NH']}元）～ AH極端突破（{cdp_v['AH']}元）** 時追高；實戰上宜等待盤中 5分K 拉回測試 **NL常態支撐（{cdp_v['NL']}元）** 或 5分K 20MA 不破時順勢切入。"
         )
     elif total >= 50:
-        verdict = "📈 偏多震盪輪動（波段結構偏多，短線留意分K支撐與籌碼續航）"
-        v_color = bull_c
+        verdict, v_color = "📈 偏多震盪輪動（波段結構偏多，短線留意分K支撐與籌碼續航）", bull_c
         v_desc = (
             f"📌 **【看懂指標意義】**：目前中長線結構仍維持偏多（月線 {ma20}元、單日Alpha {alpha_1d:+.2f}%），{chip_dir}{mg_dir}。{rev_warn_str}\n"
             f"🎯 **【後續動作與關鍵價位】**：屬偏多但短線有震盪洗盤需求，建議盯緊 60分K 與 5分K 是否同步守穩均線。下檔防守點看 **NL常態支撐（{cdp_v['NL']}元）** 與 **AL極端破底（{cdp_v['AL']}元）**，上檔過 **NH壓力（{cdp_v['NH']}元）** 需有量能配合。"
         )
     elif total >= 35:
-        verdict = "⚖️ 多空交戰拉鋸（技術與籌碼訊號分歧，宜區間靈活應對）"
-        v_color = warn_c
+        verdict, v_color = "⚖️ 多空交戰拉鋸（技術與籌碼訊號分歧，宜區間靈活應對）", warn_c
         v_desc = (
             f"📌 **【看懂指標意義】**：目前技術面與法人籌碼出現分歧（月線 {ma20}元、{chip_dir}），缺乏一致性的單邊動能。{rev_warn_str}\n"
-            f"🎯 **【後續動作與關鍵價位】**：不宜盲目追漲殺跌，建議採箱型區間操作——回測下方 **NL常態支撐（{cdp_v['NL']}元）～ AL（{al_p if 'al_p' in locals() else cdp_v['AL']}元）** 且 5分K 出低九轉折時找短多機會；反彈靠近 **NH常態壓力（{cdp_v['NH']}元）～ AH（{cdp_v['AH']}元）** 見高九受阻則先行調節。"
+            f"🎯 **【後續動作與關鍵價位】**：不宜盲目追漲殺跌，建議採箱型區間操作——回測下方 **NL常態支撐（{cdp_v['NL']}元）～ AL（{cdp_v['AL']}元）** 且 5分K 出低九轉折時找短多機會；反彈靠近 **NH常態壓力（{cdp_v['NH']}元）～ AH（{cdp_v['AH']}元）** 見高九受阻則先行調節。"
         )
     else:
-        verdict = "❄️ 空方壓制修正警戒（均線反壓 ＋ 法人提款，反彈宜保守避險）"
-        v_color = bear_c
+        verdict, v_color = "❄️ 空方壓制修正警戒（均線反壓 ＋ 法人提款，反彈宜保守避險）", bear_c
         v_desc = (
             f"📌 **【看懂指標意義】**：目前股價受制於月線（{ma20}元）反壓且弱於大盤（單日Alpha {alpha_1d:+.2f}%），{chip_dir}{mg_dir}，短線賣壓沉重。{rev_warn_str}\n"
             f"🎯 **【後續動作與關鍵價位】**：在尚未帶量站回 60分K 20MA 與日K五日線（{ma5}元）前，切勿盲目摸底接刀！盤中若反彈至 **NH常態壓力（{cdp_v['NH']}元）～ AH（{cdp_v['AH']}元）** 遇壓宜減碼或偏空避險；下檔極端宣洩支撐觀察 **NL（{cdp_v['NL']}元）** 與 **AL（{cdp_v['AL']}元）**。"
@@ -577,7 +601,6 @@ def evaluate_three_pillars(tech, chip, bull_c="#FF6B6B", bear_c="#2ECC71", warn_
 
     return {"total": total, "t_score": d1_score, "m_score": d2_score, "c_score": d3_score, "f_score": d4_score, "alpha_1d": alpha_1d, "alpha_5d": alpha_5d, "inst_vol_ratio": inst_vol_ratio, "verdict": verdict, "v_color": v_color, "v_desc": v_desc, "breakdown": breakdown}
 
-@st.cache_data(ttl=900)
 def fetch_macro_fx_and_sox(taiex_hist_df=None):
     res = {"fx_rate": 32.15, "fx_chg_5d": 0.0, "fx_ma20": 32.15, "sox_close": 5000.0, "sox_chg_1d_pct": 0.0, "sox_ma20": 5000.0, "sox_corr_20d": 0.65}
     try:
@@ -591,13 +614,15 @@ def fetch_macro_fx_and_sox(taiex_hist_df=None):
         if not df_sox.empty and len(df_sox) >= 20:
             sc, sp1 = round(float(df_sox["Close"].iloc[-1]), 1), float(df_sox["Close"].iloc[-2])
             res.update({"sox_close": sc, "sox_chg_1d_pct": round(((sc - sp1) / sp1) * 100.0, 2) if sp1 > 0 else 0.0, "sox_ma20": round(float(df_sox["Close"].tail(20).mean()), 1)})
-            if taiex_hist_df is not None and len(taiex_hist_df) >= 25:
-                s_ret = df_sox["Close"].pct_change().tail(25).reset_index(drop=True)
-                t_ret = taiex_hist_df["Close"].pct_change().tail(25).reset_index(drop=True)
-                min_l = min(len(s_ret), len(t_ret))
-                if min_l >= 15:
-                    corr_v = s_ret.tail(min_l).corr(t_ret.tail(min_l))
-                    if pd.notna(corr_v): res["sox_corr_20d"] = round(float(corr_v), 2)
+            if taiex_hist_df is not None and len(taiex_hist_df) >= 20:
+                s_ret = df_sox["Close"].pct_change().rename("sox")
+                t_ret = taiex_hist_df["Close"].pct_change().rename("twii")
+                aligned_same = pd.concat([s_ret, t_ret], axis=1).dropna().tail(20)
+                aligned_lag1 = pd.concat([s_ret.shift(1), t_ret], axis=1).dropna().tail(20)
+                c_same = aligned_same["sox"].corr(aligned_same["twii"]) if len(aligned_same) >= 12 else 0.5
+                c_lag1 = aligned_lag1["sox"].corr(aligned_lag1["twii"]) if len(aligned_lag1) >= 12 else 0.5
+                best_corr = max(c_same if pd.notna(c_same) else 0.5, c_lag1 if pd.notna(c_lag1) else 0.5)
+                res["sox_corr_20d"] = round(float(best_corr), 2)
     except Exception: pass
     return res
 
@@ -654,7 +679,6 @@ def evaluate_taiex_market_score(taiex, cfg, breadth_fg, macro_info=None, bull_c=
 
     total = max(0, min(100, macro_score + t_score + m_score + c_score + b_score))
 
-    # 大盤實戰綜合總結論 (白話解讀這5個維度代表什麼意義、現在要注意什麼)
     fx_meaning = f"新台幣匯率 {fx_c}（近5日{fx_chg5:+.2f}元，{'外資熱錢留台支撐' if fx_chg5<=0 else '短線資金有匯出壓力'}）"
     chip_meaning = f"三大法人現貨合計 {sp_tot:+.1f} 億（外資期貨未平倉 {foi:,} 口，單日 {foi_chg:+,} 口），上市櫃上漲家數佔比 {up_ratio}%"
     if total >= 70:
@@ -693,6 +717,7 @@ def fetch_all_stock_industry_map():
 
 @st.cache_data(ttl=600)
 def fetch_full_market_snapshot_and_breadth(fallback_fg=34):
+    """【v11.5 修正】安全解析證交所/櫃買中心除權息 X0.00 與平盤符號，避免誤丟有效股票報價！"""
     up_cnt = down_cnt = flat_cnt = 0
     market_snap = {}
     for url, mkt, c_k, n_k, cl_k, chg_k, val_k in [
@@ -707,9 +732,13 @@ def fetch_full_market_snapshot_and_breadth(fallback_fg=34):
                     if not re.match(r"^\d{4}$", code): continue
                     name = str(it.get(n_k, "")).strip()
                     try:
-                        close_v = float(str(it.get(cl_k, "0")).replace(",", "").strip())
-                        chg_v = float(str(it.get(chg_k, "0")).replace(",", "").replace("+", "").replace(" ", "").strip())
-                        val_v = float(str(it.get(val_k, "0")).replace(",", "").strip())
+                        m_cl = re.search(r"[-+]?\d*\.?\d+", str(it.get(cl_k, "0")).replace(",", ""))
+                        close_v = float(m_cl.group(0)) if m_cl else 0.0
+                        m_chg = re.search(r"[-+]?\d*\.?\d+", str(it.get(chg_k, "0")).replace(",", ""))
+                        chg_v = float(m_chg.group(0)) if m_chg else 0.0
+                        m_val = re.search(r"[-+]?\d*\.?\d+", str(it.get(val_k, "0")).replace(",", ""))
+                        val_v = float(m_val.group(0)) if m_val else 0.0
+
                         prev_v = close_v - chg_v
                         pct_v = round((chg_v / prev_v) * 100.0, 2) if prev_v > 0 else 0.0
                         if chg_v > 0: up_cnt += 1
@@ -778,7 +807,8 @@ def fetch_taiex_market_data():
 
 @st.cache_data(ttl=600)
 def scan_sector_performance(sector_map_json_str, margins_dict):
-    sec_map = json.loads(sector_map_json_str)
+    raw_sec_map = json.loads(sector_map_json_str)
+    sec_map = {k: [[x[0], str(x[1]).replace("🔥", ""), x[2]] for x in v] for k, v in raw_sec_map.items()}
     ind_map = fetch_all_stock_industry_map()
     snap_data = fetch_full_market_snapshot_and_breadth().get("market_snap", {})
     existing_codes = {item[0] for s_list in sec_map.values() for item in s_list}
@@ -818,7 +848,8 @@ def scan_sector_performance(sector_map_json_str, margins_dict):
             "近1日漲跌(%)": round(((close_p - prev_1d) / prev_1d) * 100, 2) if prev_1d > 0 else 0.0,
             "近5日漲跌(%)": round(((close_p - prev_5d) / prev_5d) * 100, 2) if prev_5d > 0 else 0.0,
             "月線(20MA)": ma20, "趨勢位階": "✅站上月線" if close_p >= ma20 else "⚠️月線之下",
-            "1口個股期保證金": f"{int(close_p * 2000 * m_rate):,} 元" if code in margins_dict else "無期貨"
+            "1口個股期保證金": f"{int(close_p * 2000 * m_rate):,} 元" if code in margins_dict else "無期貨",
+            "_mkt": mkt
         }
 
     with ThreadPoolExecutor(max_workers=16) as ex:
