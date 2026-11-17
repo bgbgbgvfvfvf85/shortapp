@@ -1,4 +1,4 @@
-# 檔案名稱：stock_arsenal_v1.py (v12.0 沙盒10項全過版：3167/ETF無空白精準識別 + 獨立跳轉按鈕不閃爍 + 零**符號外露)
+# 檔案名稱：stock_arsenal_v1.py (v12.1 完美跳轉版：點擊切換按鈕自動收合小助手 + 強制跨分頁跳轉分頁1 + 100%保留對話紀錄)
 import os, re, json, requests, importlib
 from datetime import datetime
 import pandas as pd
@@ -15,7 +15,7 @@ DEFAULT_STATES = {
     "font_scale": 1.05, "theme_mode": "dark", "admin_unlocked": False, "active_nav_tab": 1,
     "unlocked_tab1": False, "unlocked_tab2": False, "unlocked_tab4": False,
     "target_stock_code": "2330", "w_buy_p": 1410.0, "w_sell_p": 1415.0, "w_lots": 1,
-    "dynamic_stock_meta": {},
+    "dynamic_stock_meta": {}, "close_popover_seq": 0,
     "tab1_master_items": [
         {"id": "🕯️", "name": "🕯️ 三週期共振雷達 & K線實戰圖 (日K / 60分K / 5分K)", "show": True},
         {"id": "📊", "name": "📊 法人與資券直方柱狀圖 (近20日視覺化)", "show": True},
@@ -23,7 +23,7 @@ DEFAULT_STATES = {
         {"id": "📰", "name": "📰 近期市場消息與催化劑雷達", "show": True},
         {"id": "📐", "name": "📐 下個交易日 AH / NH / NL / AL 支撐壓力區間", "show": True},
     ],
-    "ai_chat_history": [{"role": "assistant", "content": "您好！我是戰情室 AI 助手 🤖。請點選上方快捷按鈕，或直接輸入任何**個股代號（如 3167、2330）**、**ETF 代號（如 0050、00878、00937B）**或**大盤問題**，我會立即調出官方真實數據為您統整實戰結論與 AH/NH/NL/AL 四價位！"}]
+    "ai_chat_history": [{"role": "assistant", "content": "您好！我是戰情室 AI 助手 🤖。請點選上方快捷按鈕，或直接輸入任何**個股代號（如 3167、6214）**、**ETF 代號（如 0050、00878、00937B）**或**大盤問題**，我會立即調出官方真實數據為您統整實戰結論與 AH/NH/NL/AL 四價位！"}]
 }
 for k, v in DEFAULT_STATES.items():
     st.session_state.setdefault(k, v)
@@ -57,6 +57,8 @@ div[data-testid="stPopoverBody"] h1, div[data-testid="stPopoverBody"] h2, div[da
 div[data-testid="stPopoverBody"] code, .stMarkdown code {{ background-color: rgba(59, 130, 246, 0.18) !important; color: #38BDF8 !important; padding: 2px 6px !important; border-radius: 4px !important; font-weight: bold !important; }}
 div[data-testid="stPopoverBody"] .stButton > button {{ background-color: {BG_MAIN} !important; color: {TEXT_MAIN} !important; border: 1px solid #4A90E2 !important; border-radius: 8px !important; }}
 div[data-testid="stPopoverBody"] .stButton > button * {{ color: {TEXT_MAIN} !important; }}
+div[data-testid="stPopoverBody"] .stButton > button[kind="primary"] {{ background: linear-gradient(135deg, #1E3A8A 0%, #2563EB 100%) !important; color: #FFFFFF !important; border: 1.5px solid #60A5FA !important; }}
+div[data-testid="stPopoverBody"] .stButton > button[kind="primary"] * {{ color: #FFFFFF !important; }}
 div[data-testid="stPopoverBody"] [data-testid="stVerticalBlockBorderWrapper"] {{ background-color: {BG_MAIN} !important; border-color: {CARD_BORDER} !important; }}
 div[data-testid="stPopoverBody"] [data-testid="stChatMessage"] {{ background-color: {CARD_BG_ALT} !important; border: 1px solid {CARD_BORDER} !important; border-radius: 8px !important; padding: 8px 10px !important; margin-bottom: 6px !important; }}
 div[data-testid="stPopoverBody"] [data-testid="stChatInput"] > div {{ background-color: {BG_MAIN} !important; border: 1px solid {CARD_BORDER} !important; }}
@@ -86,18 +88,32 @@ button[data-baseweb="tab"] p {{ color: {TEXT_MAIN} !important; font-weight: bold
 .disclaimer {{ font-size: {round(12.5 * scale, 1)}px; color: {TEXT_MUTED}; margin-top: 25px; line-height: 1.6; }}
 </style>""", unsafe_allow_html=True)
 
-components.html("""<script>
-(function() {
+components.html(f"""<script>
+(function() {{
     const parentDoc = window.parent.document;
-    function injectCSS(doc) {
+    function injectCSS(doc) {{
         if (!doc || doc.getElementById('plotly-hover-offset-v91')) return;
         const s = doc.createElement('style'); s.id = 'plotly-hover-offset-v91';
-        s.innerHTML = `g.hoverlayer g.hovertext > path, g.hoverlayer g.hovertext > rect, g.hoverlayer g.hovertext > text { transform: translate(68px, -10px) !important; } g.hoverlayer g.hovertext { opacity: 0.90 !important; pointer-events: none !important; }`;
+        s.innerHTML = `g.hoverlayer g.hovertext > path, g.hoverlayer g.hovertext > rect, g.hoverlayer g.hovertext > text {{ transform: translate(68px, -10px) !important; }} g.hoverlayer g.hovertext {{ opacity: 0.90 !important; pointer-events: none !important; }}`;
         doc.head.appendChild(s);
-    }
+    }}
     injectCSS(parentDoc);
-    setInterval(() => { injectCSS(parentDoc); parentDoc.querySelectorAll('iframe').forEach(ifr => { try { if (ifr.contentDocument) injectCSS(ifr.contentDocument); } catch (e) {} }); }, 800);
-})();
+    setInterval(() => {{ injectCSS(parentDoc); parentDoc.querySelectorAll('iframe').forEach(ifr => {{ try {{ if (ifr.contentDocument) injectCSS(ifr.contentDocument); }} catch (e) {{}} }}); }}, 800);
+
+    // 【v12.1 關鍵機制】當觸發跨頁跳轉時 (close_popover_seq 遞增)，自動收合展開中的小助手 Popover 並捲回頂部！
+    const closeSeq = {int(st.session_state.get("close_popover_seq", 0))};
+    if (closeSeq > 0 && window.parent._lastClosePopoverSeq !== closeSeq) {{
+        window.parent._lastClosePopoverSeq = closeSeq;
+        setTimeout(() => {{
+            const popBtn = parentDoc.querySelector('div[data-testid="stPopover"] button[aria-expanded="true"]');
+            if (popBtn) {{ popBtn.click(); }}
+            else {{
+                parentDoc.dispatchEvent(new KeyboardEvent('keydown', {{ key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }}));
+            }}
+            window.parent.scrollTo({{ top: 0, behavior: 'smooth' }});
+        }}, 60);
+    }}
+}})();
 </script>""", height=0, width=0)
 
 top_c1, top_c2 = st.columns([6.8, 3.2])
@@ -331,7 +347,6 @@ sector_map_all = de.load_sector_map()
 df_quotes, df_futures, df_cb = de.read_csv_safely(de.QUOTES_FILE), de.read_csv_safely(de.FUTURES_FILE), de.read_csv_safely(de.CB_FILE)
 margins_global_map = dict(zip(df_futures["代號"].astype(str), df_futures["保證金比例"]))
 
-# 結合常駐記憶體字典，確保雲端重啟後 100% 擁有 2,300+ 檔上市櫃個股與全品項 ETF
 master_stock_dict = de.get_master_stock_dictionary()
 if len(df_quotes) < len(master_stock_dict):
     df_quotes = pd.DataFrame(list(master_stock_dict.values())).sort_values("代號")
@@ -477,6 +492,7 @@ def jump_to_tab1_with_stock(code_str, name_str="", mkt_str="TWSE"):
         st.session_state.dynamic_stock_meta[c_clean] = {"name": n_clean, "mkt": mkt_str}
     st.session_state.target_stock_code = c_clean
     st.session_state.active_nav_tab = 1
+    st.session_state.close_popover_seq = int(st.session_state.get("close_popover_seq", 0)) + 1
     if "tab1_stock_sel_widget" in st.session_state:
         del st.session_state["tab1_stock_sel_widget"]
 
@@ -771,7 +787,7 @@ elif cur_tab == 3:
             render_cta_box(m_cta_title, m_cta_btn, cfg["broker_line_url"])
 
 # ==========================================
-# 6. 右下角懸浮「🤖 AI 戰情助手」Popover (無空白精準識別 3167/ETF + 獨立跳轉按鈕不閃爍)
+# 6. 右下角懸浮「🤖 AI 戰情助手」Popover (點擊切換按鈕自動收合小助手 + 強制全頁跳轉分頁1 + 保留對話)
 # ==========================================
 @st.fragment
 def render_floating_ai_assistant(active_code, active_name, cfg_obj, quotes_df):
@@ -793,28 +809,24 @@ def render_floating_ai_assistant(active_code, active_name, cfg_obj, quotes_df):
                 with st.chat_message(msg["role"]):
                     st.markdown(str(msg["content"]).replace("`", "**"))
                     btn_c, btn_n, btn_m = msg.get("stock_code"), msg.get("stock_name", ""), msg.get("stock_mkt", "TWSE")
-                    if btn_c and str(btn_c) != str(st.session_state.target_stock_code):
-                        st.button(
-                            f"🔍 點此將背景主畫面切換至【{btn_c} {btn_n}】K線圖 ➔",
-                            key=f"ai_jmp_btn_{idx_m}_{btn_c}",
-                            use_container_width=True,
-                            on_click=jump_to_tab1_with_stock,
-                            args=(btn_c, btn_n, btn_m)
-                        )
+                    if btn_c:
+                        is_already_on_tab1 = (int(st.session_state.active_nav_tab) == 1) and (str(btn_c) == str(st.session_state.target_stock_code))
+                        btn_label = f"✅ 目前分頁1已顯示【{btn_c} {btn_n}】(點此收合小助手看圖)" if is_already_on_tab1 else f"🚀 點此收合小助手並跳轉【分頁1：{btn_c} {btn_n}】K線圖 ➔"
+                        if st.button(btn_label, key=f"ai_jmp_btn_{idx_m}_{btn_c}", use_container_width=True, type="primary" if not is_already_on_tab1 else "secondary"):
+                            jump_to_tab1_with_stock(btn_c, btn_n, btn_m)
+                            st.rerun(scope="app")
 
         user_in = st.chat_input("輸入個股(如 3167)、ETF(如 0050)或大盤問題...")
         final_q = quick_q or user_in
         if final_q:
             st.session_state.ai_chat_history.append({"role": "user", "content": final_q})
 
-            # 【v12.0 核心根治】無邊界正則擷取：即使中文字與代號連打無空格 (如「怎麼看3167」、「買00937B」)，100% 精準鎖定！
             target_c, target_n = active_code, active_name
             m_code = re.search(r"(?<![0-9A-Za-z])(00\d{2,4}[A-Za-z]?|\d{4})(?![0-9A-Za-z])", final_q.upper())
             if m_code:
                 target_c = m_code.group(1).upper()
                 target_n = code_to_name_map.get(target_c, master_stock_dict.get(target_c, {}).get("名稱", target_c))
             else:
-                # 支援直接輸入中文股名 (依名稱長度由長到短比對，避免「南亞」誤配「南亞科」)
                 for s_name in sorted(name_to_code_map.keys(), key=len, reverse=True):
                     if len(s_name) >= 2 and s_name in final_q:
                         target_c, target_n = name_to_code_map[s_name], s_name
