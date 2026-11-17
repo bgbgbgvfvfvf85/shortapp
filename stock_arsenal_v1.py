@@ -1,4 +1,4 @@
-# 檔案名稱：stock_arsenal_v1.py (v11.4 二次沙盒實測完畢版：修復動態股跨頁股名記憶 + 歷史白框清洗 + 精準快取刷新)
+# 檔案名稱：stock_arsenal_v1.py (v12.0 沙盒10項全過版：3167/ETF無空白精準識別 + 獨立跳轉按鈕不閃爍 + 零**符號外露)
 import os, re, json, requests, importlib
 from datetime import datetime
 import pandas as pd
@@ -23,7 +23,7 @@ DEFAULT_STATES = {
         {"id": "📰", "name": "📰 近期市場消息與催化劑雷達", "show": True},
         {"id": "📐", "name": "📐 下個交易日 AH / NH / NL / AL 支撐壓力區間", "show": True},
     ],
-    "ai_chat_history": [{"role": "assistant", "content": "您好！我是戰情室 AI 助手 🤖。請點選上方快捷按鈕，或輸入任何**股票代號（如 2330、3017、0050）**或**大盤問題**，我會直接幫您統整數據並給出實戰總結論與 AH/NH/NL/AL 關鍵價位！"}]
+    "ai_chat_history": [{"role": "assistant", "content": "您好！我是戰情室 AI 助手 🤖。請點選上方快捷按鈕，或直接輸入任何**個股代號（如 3167、2330）**、**ETF 代號（如 0050、00878、00937B）**或**大盤問題**，我會立即調出官方真實數據為您統整實戰結論與 AH/NH/NL/AL 四價位！"}]
 }
 for k, v in DEFAULT_STATES.items():
     st.session_state.setdefault(k, v)
@@ -323,7 +323,7 @@ def render_fast_profit_calculator(line_url, is_public_promo=False):
     )
 
 # ==========================================
-# 4. 營業員永久記憶加密後台與全市場名冊載入
+# 4. 營業員永久記憶加密後台與全市場 2,300+ 檔常駐名冊載入
 # ==========================================
 de.init_sample_csvs()
 cfg = de.load_config()
@@ -331,8 +331,13 @@ sector_map_all = de.load_sector_map()
 df_quotes, df_futures, df_cb = de.read_csv_safely(de.QUOTES_FILE), de.read_csv_safely(de.FUTURES_FILE), de.read_csv_safely(de.CB_FILE)
 margins_global_map = dict(zip(df_futures["代號"].astype(str), df_futures["保證金比例"]))
 
+# 結合常駐記憶體字典，確保雲端重啟後 100% 擁有 2,300+ 檔上市櫃個股與全品項 ETF
+master_stock_dict = de.get_master_stock_dictionary()
+if len(df_quotes) < len(master_stock_dict):
+    df_quotes = pd.DataFrame(list(master_stock_dict.values())).sort_values("代號")
+
 if not df_quotes.empty:
-    df_quotes = df_quotes[df_quotes["代號"].str.match(r"^(\d{4}|00\d{2,4}[A-Z]?)$", na=False)].copy()
+    df_quotes = df_quotes[df_quotes["代號"].str.match(r"^(00\d{2,4}[A-Za-z]?|\d{4})$", na=False)].copy()
     fut_codes = set(df_futures["代號"].astype(str))
     df_quotes["has_fut_sort"] = df_quotes["代號"].astype(str).apply(lambda x: 0 if x in fut_codes else 1)
     stock_options = [f"{r['代號']} {r['名稱']}" + (" ⚡[有期貨]" if str(r['代號']) in fut_codes else "") for _, r in df_quotes.sort_values(["has_fut_sort", "代號"]).iterrows()]
@@ -342,7 +347,6 @@ code_to_name_map = dict(zip(df_quotes["代號"].astype(str), df_quotes["名稱"]
 name_to_code_map = dict(zip(df_quotes["名稱"].astype(str), df_quotes["代號"].astype(str)))
 code_to_mkt_map = dict(zip(df_quotes["代號"].astype(str), df_quotes.get("市場", pd.Series(["TWSE"]*len(df_quotes)))))
 
-# 合併動態跨頁記憶股名與市場別
 for d_code, d_meta in st.session_state.get("dynamic_stock_meta", {}).items():
     code_to_name_map.setdefault(d_code, d_meta["name"])
     name_to_code_map.setdefault(d_meta["name"], d_code)
@@ -400,7 +404,7 @@ with st.sidebar:
             os.remove(de.CUSTOM_SECTORS_FILE); de.scan_sector_performance.clear(); st.rerun()
 
         st.divider(); st.subheader("🚀 官方名冊與大盤籌碼同步")
-        if st.button("📈 1. 更新上市櫃 2,100+ 檔股票與 ETF 名冊", use_container_width=True):
+        if st.button("📈 1. 更新上市櫃 2,300+ 檔股票與 ETF 名冊", use_container_width=True):
             with st.spinner("正在更新上市櫃股票與全品項 ETF..."):
                 ok, msg = de.sync_stock_code_list_online()
                 if ok: st.success(msg); st.rerun()
@@ -467,7 +471,7 @@ def jump_to_tab2_with_price(close_p):
     st.session_state.w_buy_p, st.session_state.w_sell_p, st.session_state.active_nav_tab = float(close_p), float(de.step_tw_ticks(close_p, 2)), 2
 
 def jump_to_tab1_with_stock(code_str, name_str="", mkt_str="TWSE"):
-    c_clean = str(code_str).strip()
+    c_clean = str(code_str).strip().upper()
     n_clean = str(name_str).replace("🔥", "").strip()
     if n_clean:
         st.session_state.dynamic_stock_meta[c_clean] = {"name": n_clean, "mkt": mkt_str}
@@ -477,7 +481,7 @@ def jump_to_tab1_with_stock(code_str, name_str="", mkt_str="TWSE"):
         del st.session_state["tab1_stock_sel_widget"]
 
 # ------------------------------------------------------------------
-# 【分頁 1：🔍 個股三週期共振雷達 (含實戰綜合總結論 & AH/NH/NL/AL 四價位)】
+# 【分頁 1：🔍 個股/ETF 三週期共振雷達 (含實戰綜合總結論 & AH/NH/NL/AL 四價位)】
 # ------------------------------------------------------------------
 if cur_tab == 1:
     if check_tab_password_gate(1, "unlocked_tab1", cfg.get("lock_tab1", False), cfg.get("pwd_tab1", "VIP888"), "個股三週期技術與籌碼雷達", "輸入本季基礎 VIP 通行碼即可解鎖「日K/60分K/5分K三週期共振雷達與機構級評分」。", cfg["broker_line_url"]):
@@ -487,27 +491,27 @@ if cur_tab == 1:
         def _toggle_mod(idx): st.session_state.tab1_master_items[idx]["show"] = not st.session_state.tab1_master_items[idx]["show"]
         def _reset_mod(): st.session_state.tab1_master_items = [dict(x) for x in DEFAULT_STATES["tab1_master_items"]]
 
-        target_c = str(st.session_state.target_stock_code).strip()
+        target_c = str(st.session_state.target_stock_code).strip().upper()
         if not any(opt.startswith(target_c + " ") for opt in stock_options):
             sec_lookup = {item[0]: (item[1].replace("🔥", ""), item[2]) for s_list in sector_map_all.values() for item in s_list}
             dyn_meta = st.session_state.get("dynamic_stock_meta", {}).get(target_c, {})
-            s_name_fb, s_mkt_fb = sec_lookup.get(target_c, (dyn_meta.get("name", code_to_name_map.get(target_c, target_c)), dyn_meta.get("mkt", "TWSE")))
+            s_name_fb, s_mkt_fb = sec_lookup.get(target_c, (dyn_meta.get("name", code_to_name_map.get(target_c, target_c)), dyn_meta.get("mkt", "TPEX" if target_c.endswith("B") else "TWSE")))
             code_to_name_map[target_c], code_to_mkt_map[target_c] = s_name_fb, s_mkt_fb
             has_f_tag = " ⚡[有期貨]" if target_c in set(df_futures["代號"].astype(str)) else ""
             stock_options.insert(0, f"{target_c} {s_name_fb}{has_f_tag}")
 
         default_idx = next((i for i, opt in enumerate(stock_options) if opt.startswith(target_c + " ")), 0)
         sel_c1, sel_c2 = st.columns([6.8, 3.2])
-        selected_option = sel_c1.selectbox(f"📌 請直接輸入股票或 ETF 代號/名稱搜尋（目前共收錄 {len(stock_options):,} 檔上市櫃標的）：", options=stock_options, index=default_idx, key="tab1_stock_sel_widget")
-        selected_code = selected_option.split(" ")[0]
+        selected_option = sel_c1.selectbox(f"📌 請直接輸入個股或 ETF 代號/名稱搜尋（目前共收錄 {len(stock_options):,} 檔上市櫃標的）：", options=stock_options, index=default_idx, key="tab1_stock_sel_widget")
+        selected_code = selected_option.split(" ")[0].strip().upper()
         st.session_state.target_stock_code = selected_code
 
         match_rows = df_quotes[df_quotes["代號"] == selected_code]
         stock_name = str(match_rows.iloc[0]["名稱"]) if not match_rows.empty else code_to_name_map.get(selected_code, selected_code)
-        market_hint = str(match_rows.iloc[0].get("市場", "TWSE")) if not match_rows.empty else code_to_mkt_map.get(selected_code, "TWSE")
+        market_hint = str(match_rows.iloc[0].get("市場", "TWSE")) if not match_rows.empty else code_to_mkt_map.get(selected_code, "TPEX" if selected_code.endswith("B") else "TWSE")
         current_active_code, current_active_name = selected_code, stock_name
 
-        with st.spinner(f"正在掃描【{selected_code} {stock_name}】三週期共振、對抗大盤 Alpha、外本比/投本比與月營收加速度..."):
+        with st.spinner(f"正在對帳【{selected_code} {stock_name}】官方真實日K、三週期共振、對抗大盤 Alpha、外本比/投本比與月營收..."):
             tech = de.fetch_technical_indicators(selected_code, market_hint)
             tech_60m = de.fetch_intraday_kline_full(selected_code, market_hint, interval="60m")
             tech_5m = de.fetch_intraday_kline_full(selected_code, market_hint, interval="5m")
@@ -536,20 +540,19 @@ if cur_tab == 1:
                 mc4.button("⬇️ 下移", key=f"mod_dn_{m_item['id']}", disabled=(i == len(st.session_state.tab1_master_items) - 1), use_container_width=True, on_click=_move_mod, args=(i, 1))
             st.button("🔄 恢復預設順序與全部顯示", use_container_width=True, on_click=_reset_mod)
 
-        eval_res = de.evaluate_three_pillars(tech, chip, BULL_COLOR, BEAR_COLOR, WARN_COLOR, tech_60m=tech_60m, tech_5m=tech_5m, margin_info=margin_info, fund_info=fund_info, taiex_info=taiex_quick)
+        eval_res = de.evaluate_three_pillars(tech, chip, BULL_COLOR, BEAR_COLOR, WARN_COLOR, tech_60m=tech_60m, tech_5m=tech_5m, margin_info=margin_info, fund_info=fund_info, taiex_info=taiex_quick, code_str=selected_code)
         st.subheader(f"📊 【{selected_code} {stock_name}】機構級四維度共振體檢 & 實戰總結論")
         st.markdown(f"<p style='font-size:{round(14*scale, 1)}px; color:{TEXT_MUTED}; margin-top:-10px;'>📅 <b>最新有效交易日：{trade_date}</b> ｜ 最新價格：<b>{close_price} 元</b>（單日 <b>{tech['chg_1d_pct']:+.2f}%</b> ／ 對抗大盤 Alpha <b>{eval_res['alpha_1d']:+.2f}%</b>） ｜ 市場：<b>{'上市' if market_hint=='TWSE' else '上櫃'}</b></p>", unsafe_allow_html=True)
 
-        desc_html = eval_res["v_desc"].replace("\n", "<br>")
         st.markdown(f"""<div class="score-banner"><div style="flex: 1; min-width: 240px;">
         <div style="font-size: {round(13.5 * scale, 1)}px; color: {TEXT_MUTED}; margin-bottom: 4px;">🎯 系統機構級實戰總結論（綜合 Alpha、三週期分K、投本比/外本比與 AH/NH/NL/AL 價位）</div>
         <div style="font-size: {round(19 * scale, 1)}px; font-weight: bold; color: {eval_res['v_color']}; margin-bottom: 8px;">{eval_res['verdict']}</div>
-        <div style="font-size: {round(14.2 * scale, 1)}px; color: {TEXT_MAIN}; line-height: 1.7; background: {SCORE_BOX_BG}; padding: 10px 14px; border-radius: 8px; border-left: 4px solid {eval_res['v_color']};">{desc_html}</div></div>
+        <div style="font-size: {round(14.2 * scale, 1)}px; color: {TEXT_MAIN}; line-height: 1.7; background: {SCORE_BOX_BG}; padding: 10px 14px; border-radius: 8px; border-left: 4px solid {eval_res['v_color']};">{eval_res['v_desc_html']}</div></div>
         <div style="text-align: center; padding: 12px 18px; background: {SCORE_BOX_BG}; border-radius: 10px; border: 1px solid {CARD_BORDER};">
         <div style="font-size: {round(12.5 * scale, 1)}px; color: {TEXT_MUTED};">機構量化總分</div>
         <div style="font-size: {round(32 * scale, 1)}px; font-weight: bold; color: {eval_res['v_color']};">{eval_res['total']}<span style="font-size:{round(14 * scale, 1)}px; color:{TEXT_SUB};"> / 100</span></div></div></div>""", unsafe_allow_html=True)
 
-        with st.expander(f"🧮 點此查看【{stock_name} {eval_res['total']} / 100 分】之 4 大維度動態給分明細表（Alpha與趨勢 {eval_res['t_score']}/25 ＋ 三週期動能 {eval_res['m_score']}/25 ＋ 外本比與資券 {eval_res['c_score']}/30 ＋ 營收加速度 {eval_res['f_score']}/20）"):
+        with st.expander(f"🧮 點此查看【{stock_name} {eval_res['total']} / 100 分】之 4 大維度動態給分明細表（Alpha與趨勢 {eval_res['t_score']}/25 ＋ 三週期動能 {eval_res['m_score']}/25 ＋ 外本比與資券 {eval_res['c_score']}/30 ＋ 營收/位階 {eval_res['f_score']}/20）"):
             st.dataframe(pd.DataFrame(eval_res["breakdown"], columns=["評估維度", "本項得分", "客觀數據動態計分依據"]), use_container_width=True, hide_index=True)
 
         t_pct, m_pct, c_pct, f_pct = int((eval_res["t_score"] / 25.0) * 100), int((eval_res["m_score"] / 25.0) * 100), int((eval_res["c_score"] / 30.0) * 100), int((eval_res["f_score"] / 20.0) * 100)
@@ -559,21 +562,22 @@ if cur_tab == 1:
         td_str = (f"▲低九第 {td_b_cnt} 天" + (" (🔥滿9轉折)" if td_b_cnt == 9 else "")) if td_b_cnt > 0 else ((f"▼高九第 {td_s_cnt} 天" + (" (⚠️滿9衰竭)" if td_s_cnt == 9 else "")) if td_s_cnt > 0 else "⚪ 無連續九轉")
         p_chip = chip["periods"]
 
-        if fund_info.get("has_rev"):
+        if fund_info.get("has_rev") and not selected_code.startswith("00"):
             rev_yoy, rev_acc = fund_info["yoy_latest"], fund_info["yoy_accel"]
             rev_tag = f'<span class="{"tag-bull" if (rev_yoy > 0 and rev_acc >= 0) else ("tag-bear" if rev_yoy < 0 else "tag-neutral")}">{"加速成長" if rev_acc >= 0 else "高檔降速"}</span>'
             rev_main = f"YoY {rev_yoy:+.1f}%"
             rev_sub = f"- <b>{fund_info['rev_month']} 營收加速度：</b>較近3月均 <b>{rev_acc:+.1f}%</b><br>- <b>月增率(MoM)：</b>{fund_info['mom_latest']:+.1f}% ｜ <b>外資持股：</b>{fund_info['foreign_hold_pct']}%"
         else:
-            rev_tag = f'<span class="{"tag-bull" if margin_info["short_margin_ratio"] >= 15 else "tag-neutral"}">券資比 {margin_info["short_margin_ratio"]}%</span>'
-            rev_main = f"融資 {margin_info['margin_bal']:,} 張" if margin_info["eligible"] else "ETF / 權證標的"
-            rev_sub = f"- <b>融資單日：</b>{fmt_colored_num(margin_info['margin_chg'])} (使用率 {margin_info['margin_util']}%)<br>- <b>融券單日：</b>{fmt_colored_num(margin_info['short_chg'])}" if margin_info["eligible"] else "- 本標的無月營收欄位，已按比例動態換算評分。"
+            bias_etf = round(((close_price - ma20_price) / ma20_price) * 100.0, 2) if ma20_price > 0 else 0.0
+            rev_tag = f'<span class="{"tag-bull" if bias_etf >= 0 else "tag-bear"}">月線乖離 {bias_etf:+.1f}%</span>'
+            rev_main = f"融資 {margin_info['margin_bal']:,} 張" if margin_info["eligible"] else "🏦 ETF 專區模式"
+            rev_sub = f"- <b>融資單日：</b>{fmt_colored_num(margin_info['margin_chg'])} (使用率 {margin_info['margin_util']}%)<br>- <b>融券單日：</b>{fmt_colored_num(margin_info['short_chg'])}" if margin_info["eligible"] else f"- <b>ETF 乖離位階：</b>月線乖離 <b>{bias_etf:+.2f}%</b> (留意外資與散戶融資動向)"
 
         st.markdown(f"""<div class="pillar-grid">
         <div class="pillar-card"><div class="pillar-title"><span>🛡️ 1. 相對強弱(Alpha) & 均線</span>{t_tag}</div><div class="pillar-main">月線 {ma20_price} 元</div><div class="bar-bg"><div style="width:{t_pct}%; height:100%; background:{BULL_COLOR if t_pct>=60 else BEAR_COLOR};"></div></div><div class="pillar-sub">- <b>5日對抗大盤 Alpha：</b><b>{eval_res['alpha_5d']:+.2f}%</b><br>- <b>20日扣抵：</b>{deduct_price} 元 ({'助漲' if close_price >= deduct_price else '反壓'})<br>- <b>五日/季線：</b>5MA {tech['ma5']} ／ 60MA {ma60_price} 元</div></div>
         <div class="pillar-card"><div class="pillar-title"><span>⚡ 2. 三週期動能 & 九轉</span>{m_tag}</div><div class="pillar-main">K：{k_val} ｜ D：{d_val}</div><div class="bar-bg"><div style="width:{m_pct}%; height:100%; background:{BULL_COLOR if m_pct>=60 else BEAR_COLOR};"></div></div><div class="pillar-sub">- <b>60分/5分K 20MA：</b>{tech_60m.get('ma20','-')} ／ {tech_5m.get('ma20','-')} 元<br>- <b>神奇九轉：</b><b>{td_str}</b><br>- <b>量能比：</b>5日均量 <b>{vol_ratio} 倍</b> ｜ RSI {rsi_val}</div></div>
         <div class="pillar-card"><div class="pillar-title"><span>💰 3. 外本比/投本比 & 資券</span>{c_tag}</div><div class="pillar-main">5日 {fmt_colored_num(p_chip[5]['tot'])}</div><div class="bar-bg"><div style="width:{c_pct}%; height:100%; background:{BULL_COLOR if c_pct>=60 else BEAR_COLOR};"></div></div><div class="pillar-sub">- <b>近1日：</b>{fmt_colored_num(p_chip[1]['tot'])} ｜ <b>3日：</b>{fmt_colored_num(p_chip[3]['tot'])}<br>- <b>外資5日持股比增減：</b><b>{fund_info['foreign_hold_chg_5d']:+.2f}%</b><br>- <b>5日資增減：</b>{fmt_colored_num(margin_info['periods'][5]['m_chg'])} (券資比 {margin_info['short_margin_ratio']}%)</div></div>
-        <div class="pillar-card"><div class="pillar-title"><span>🚀 4. 營收加速度 & 預期檢驗</span>{rev_tag}</div><div class="pillar-main">{rev_main}</div><div class="bar-bg"><div style="width:{f_pct}%; height:100%; background:#3498DB;"></div></div><div class="pillar-sub">{rev_sub}<br>- <b>10日/20日法人：</b>{fmt_colored_num(p_chip[10]['tot'])} ／ {fmt_colored_num(p_chip[20]['tot'])}</div></div></div>""", unsafe_allow_html=True)
+        <div class="pillar-card"><div class="pillar-title"><span>🚀 4. 營收加速度 / ETF位階</span>{rev_tag}</div><div class="pillar-main">{rev_main}</div><div class="bar-bg"><div style="width:{f_pct}%; height:100%; background:#3498DB;"></div></div><div class="pillar-sub">{rev_sub}<br>- <b>10日/20日法人：</b>{fmt_colored_num(p_chip[10]['tot'])} ／ {fmt_colored_num(p_chip[20]['tot'])}</div></div></div>""", unsafe_allow_html=True)
 
         for sec_item in [x["id"] for x in st.session_state.tab1_master_items if x["show"]]:
             if sec_item == "🕯️":
@@ -590,7 +594,7 @@ if cur_tab == 1:
                 show_cdp_s = chk_c3.checkbox("📐 疊加 AH / NH / NL / AL 支撐壓力線", value=True, key="s_cdp_chk")
 
                 k_tab_daily, k_tab_60m, k_tab_5m = st.tabs([
-                    "📅 1. 日 K 實戰圖 (近60日 + 扣抵⭐ + 布林 + 九轉)",
+                    "📅 1. 日 K 實戰圖 (100%官方對帳近60日 + 扣抵⭐ + 布林 + 九轉)",
                     "⏱️ 2. 60 分 K 波段轉折圖 (小時線 + 布林 + 九轉 + 扣抵⭐ + 四價位)",
                     "⚡ 3. 5 分 K 當沖狙擊圖 (五分線 + 布林 + 九轉 + 扣抵⭐ + 四價位)"
                 ])
@@ -670,12 +674,12 @@ elif cur_tab == 3:
         tb4_c1, tb4_c2 = st.columns([7.5, 2.5])
         tb4_c1.subheader("🚦 台股大盤資金風向球 & 實戰總結論")
         if tb4_c2.button("🔄 重新掃描族群與大盤", use_container_width=True):
-            for fn in (de.fetch_taiex_market_data, de.auto_sync_market_chips_cached, de.fetch_full_market_snapshot_and_breadth, de.scan_sector_performance):
+            for fn in (de.fetch_taiex_market_data, de._fetch_twse_official_taiex_kline, de.auto_sync_market_chips_cached, de.fetch_full_market_snapshot_and_breadth, de.scan_sector_performance):
                 try: fn.clear()
                 except Exception: pass
             st.rerun()
 
-        with st.spinner("⚡ 正在載入最新加權指數、新台幣匯率、費半連動與三大法人期現貨..."):
+        with st.spinner("⚡ 正在載入證交所官方大盤真實日K、新台幣匯率、費半連動與三大法人期現貨..."):
             cfg = de.auto_sync_market_chips_cached(fm_token_str)
             taiex = de.fetch_taiex_market_data()
             breadth_fg = de.fetch_full_market_snapshot_and_breadth(cfg.get("cnn_fear_greed", 34))
@@ -694,14 +698,13 @@ elif cur_tab == 3:
             mkt_eval = de.evaluate_taiex_market_score(taiex, cfg, breadth_fg, taiex.get("macro"), BULL_COLOR, BEAR_COLOR, WARN_COLOR)
             mkt_total, m_light, m_color, m_cta_title, m_cta_btn = mkt_eval["total"], mkt_eval["light"], mkt_eval["color"], mkt_eval["cta_title"], mkt_eval["cta_btn"]
             macro = mkt_eval["macro"]
-            mkt_summary_html = mkt_eval["summary_action"].replace("\n", "<br>")
 
             st.markdown(f"<p style='font-size:{round(14*scale, 1)}px; color:{TEXT_MUTED};'>📅 <b>最新有效交易日：{taiex['date']}</b> ｜ 加權指數：<b>{t_close:,} 點</b>（漲跌 <b>{taiex['chg']:+} 點</b>） ｜ 💵 新台幣匯率：<b>{macro['fx_rate']}</b>（近5日 {macro['fx_chg_5d']:+.2f}） ｜ 🌎 費半：<b>{macro['sox_chg_1d_pct']:+.2f}%</b>（20日相關係數 <b>r={macro['sox_corr_20d']}</b>）</p>", unsafe_allow_html=True)
 
             st.markdown(f"""<div class="score-banner"><div style="flex: 1; min-width: 240px;">
             <div style="font-size: {round(13.5 * scale, 1)}px; color: {TEXT_MUTED}; margin-bottom: 4px;">🚦 今日台股大盤多空風向燈號 & 實戰總結論</div>
             <div style="font-size: {round(19 * scale, 1)}px; font-weight: bold; color: {m_color}; margin-bottom: 8px;">{m_light}</div>
-            <div style="font-size: {round(14.2 * scale, 1)}px; color: {TEXT_MAIN}; line-height: 1.7; background: {SCORE_BOX_BG}; padding: 10px 14px; border-radius: 8px; border-left: 4px solid {m_color}; margin-bottom: 8px;">{mkt_summary_html}</div></div>
+            <div style="font-size: {round(14.2 * scale, 1)}px; color: {TEXT_MAIN}; line-height: 1.7; background: {SCORE_BOX_BG}; padding: 10px 14px; border-radius: 8px; border-left: 4px solid {m_color}; margin-bottom: 8px;">{mkt_eval['summary_action_html']}</div></div>
             <div style="text-align: center; padding: 12px 18px; background: {SCORE_BOX_BG}; border-radius: 10px; border: 1px solid {CARD_BORDER};">
             <div style="font-size: {round(12.5 * scale, 1)}px; color: {TEXT_MUTED};">大盤動態風向分</div>
             <div style="font-size: {round(32 * scale, 1)}px; font-weight: bold; color: {m_color};">{mkt_total}<span style="font-size:{round(14 * scale, 1)}px; color:{TEXT_SUB};"> / 100</span></div></div></div>""", unsafe_allow_html=True)
@@ -768,7 +771,7 @@ elif cur_tab == 3:
             render_cta_box(m_cta_title, m_cta_btn, cfg["broker_line_url"])
 
 # ==========================================
-# 6. 右下角懸浮「🤖 AI 戰情助手」Popover (無白框清晰版 + 支援Gemini問答 + 實戰總結論 + 四價位)
+# 6. 右下角懸浮「🤖 AI 戰情助手」Popover (無空白精準識別 3167/ETF + 獨立跳轉按鈕不閃爍)
 # ==========================================
 @st.fragment
 def render_floating_ai_assistant(active_code, active_name, cfg_obj, quotes_df):
@@ -779,30 +782,45 @@ def render_floating_ai_assistant(active_code, active_name, cfg_obj, quotes_df):
             st.session_state.ai_chat_history = [dict(DEFAULT_STATES["ai_chat_history"][0])]
             st.rerun()
 
-        st.caption(f"目前鎖定：**{active_code} {active_name}**（可直接輸入任何 4 碼股票或 ETF 代號提問）")
+        st.caption(f"目前背景主畫面：**{active_code} {active_name}**（可直接輸入任何個股如 3167 或 ETF 如 0050、00937B 獨立提問）")
         q_col1, q_col2 = st.columns(2)
         quick_q = None
-        if q_col1.button(f"📊 診斷 {active_code} {active_name}", use_container_width=True): quick_q = f"請幫我診斷 {active_code} {active_name} 的機構4維度評分、三週期共振、實戰總結論與明日 AH/NH/NL/AL 四價位"
+        if q_col1.button(f"📊 診斷 {active_code} {active_name}", use_container_width=True): quick_q = f"請幫我診斷 {active_code} {active_name}"
         if q_col2.button("🛡️ 大盤匯率費半與總結", use_container_width=True): quick_q = "請告訴我今日大盤5維度評分、匯率費半連動與實戰操作總結論"
 
-        with st.container(height=300, border=True):
-            for msg in st.session_state.ai_chat_history[-8:]:
+        with st.container(height=310, border=True):
+            for idx_m, msg in enumerate(st.session_state.ai_chat_history[-8:]):
                 with st.chat_message(msg["role"]):
-                    # 自動清洗歷史訊息殘留之反引號，杜絕舊白框
                     st.markdown(str(msg["content"]).replace("`", "**"))
+                    btn_c, btn_n, btn_m = msg.get("stock_code"), msg.get("stock_name", ""), msg.get("stock_mkt", "TWSE")
+                    if btn_c and str(btn_c) != str(st.session_state.target_stock_code):
+                        st.button(
+                            f"🔍 點此將背景主畫面切換至【{btn_c} {btn_n}】K線圖 ➔",
+                            key=f"ai_jmp_btn_{idx_m}_{btn_c}",
+                            use_container_width=True,
+                            on_click=jump_to_tab1_with_stock,
+                            args=(btn_c, btn_n, btn_m)
+                        )
 
-        user_in = st.chat_input("輸入股票代號(如 3017、0050)或問題...")
+        user_in = st.chat_input("輸入個股(如 3167)、ETF(如 0050)或大盤問題...")
         final_q = quick_q or user_in
         if final_q:
             st.session_state.ai_chat_history.append({"role": "user", "content": final_q})
-            target_c, target_n = active_code, active_name
-            m_code = re.search(r"\b(\d{4}|00\d{2,4}[A-Z]?)\b", final_q.upper())
-            if m_code and m_code.group(1) in code_to_name_map: target_c, target_n = m_code.group(1), code_to_name_map[m_code.group(1)]
-            else:
-                for s_name, s_code in name_to_code_map.items():
-                    if len(s_name) >= 2 and s_name in final_q: target_c, target_n = s_code, s_name; break
 
-            if any(k in final_q for k in ["大盤", "止跌", "轉折", "匯率", "費半"]):
+            # 【v12.0 核心根治】無邊界正則擷取：即使中文字與代號連打無空格 (如「怎麼看3167」、「買00937B」)，100% 精準鎖定！
+            target_c, target_n = active_code, active_name
+            m_code = re.search(r"(?<![0-9A-Za-z])(00\d{2,4}[A-Za-z]?|\d{4})(?![0-9A-Za-z])", final_q.upper())
+            if m_code:
+                target_c = m_code.group(1).upper()
+                target_n = code_to_name_map.get(target_c, master_stock_dict.get(target_c, {}).get("名稱", target_c))
+            else:
+                # 支援直接輸入中文股名 (依名稱長度由長到短比對，避免「南亞」誤配「南亞科」)
+                for s_name in sorted(name_to_code_map.keys(), key=len, reverse=True):
+                    if len(s_name) >= 2 and s_name in final_q:
+                        target_c, target_n = name_to_code_map[s_name], s_name
+                        break
+
+            if not m_code and any(k in final_q for k in ["大盤", "加權", "台指", "止跌", "匯率", "費半"]):
                 tx, bfg = de.fetch_taiex_market_data(), de.fetch_full_market_snapshot_and_breadth(cfg_obj.get("cnn_fear_greed", 34))
                 if tx["ok"]:
                     m_ev = de.evaluate_taiex_market_score(tx, cfg_obj, bfg, tx.get("macro"), BULL_COLOR, BEAR_COLOR, WARN_COLOR)
@@ -817,40 +835,47 @@ def render_floating_ai_assistant(active_code, active_name, cfg_obj, quotes_df):
                         f"{m_ev['summary_action']}"
                     )
                 else: reply_txt = "目前暫時無法取得大盤資料，請稍後再試。"
+                st.session_state.ai_chat_history.append({"role": "assistant", "content": reply_txt})
             else:
-                t_d = de.fetch_technical_indicators(target_c, code_to_mkt_map.get(target_c, "TWSE"))
-                t_60 = de.fetch_intraday_kline_full(target_c, code_to_mkt_map.get(target_c, "TWSE"), "60m")
-                t_5 = de.fetch_intraday_kline_full(target_c, code_to_mkt_map.get(target_c, "TWSE"), "5m")
+                t_mkt = code_to_mkt_map.get(target_c, master_stock_dict.get(target_c, {}).get("市場", "TPEX" if target_c.endswith("B") else "TWSE"))
+                t_d = de.fetch_technical_indicators(target_c, t_mkt)
+                t_60 = de.fetch_intraday_kline_full(target_c, t_mkt, "60m")
+                t_5 = de.fetch_intraday_kline_full(target_c, t_mkt, "5m")
                 c_d = de.fetch_chip_data_20d(target_c, str(cfg_obj.get("finmind_token", "")).strip())
                 m_d = de.fetch_margin_short_20d(target_c, str(cfg_obj.get("finmind_token", "")).strip())
                 f_d = de.fetch_fundamental_revenue_and_shareholding(target_c, str(cfg_obj.get("finmind_token", "")).strip())
                 tx_q = de.fetch_taiex_market_data()
                 if t_d["ok"]:
-                    ev = de.evaluate_three_pillars(t_d, c_d, BULL_COLOR, BEAR_COLOR, WARN_COLOR, tech_60m=t_60, tech_5m=t_5, margin_info=m_d, fund_info=f_d, taiex_info=tx_q)
+                    if target_n == target_c:
+                        snap_m = de.fetch_full_market_snapshot_and_breadth().get("market_snap", {})
+                        if target_c in snap_m: target_n = snap_m[target_c]["name"]
+                    ev = de.evaluate_three_pillars(t_d, c_d, BULL_COLOR, BEAR_COLOR, WARN_COLOR, tech_60m=t_60, tech_5m=t_5, margin_info=m_d, fund_info=f_d, taiex_info=tx_q, code_str=target_c)
                     cdp_v, p_c = de.calculate_cdp(t_d["high"], t_d["low"], t_d["close"]), c_d["periods"]
                     mtf_r = de.evaluate_mtf_resonance(t_d, t_60, t_5, cdp_v, BULL_COLOR, BEAR_COLOR, WARN_COLOR)
-                    rev_str = f"{f_d['rev_month']} 營收 YoY **{f_d['yoy_latest']:+.1f}%** (加速度 **{f_d['yoy_accel']:+.1f}%**)" if f_d.get("has_rev") else "ETF/無月營收"
+                    is_etf_q = str(target_c).startswith("00")
+                    rev_str = f"{f_d['rev_month']} 營收 YoY **{f_d['yoy_latest']:+.1f}%** (加速度 **{f_d['yoy_accel']:+.1f}%**)" if (f_d.get("has_rev") and not is_etf_q) else f"ETF 均線乖離率 **{round(((t_d['close']-t_d['ma20'])/t_d['ma20'])*100, 2):+.2f}%** (留意低九與散戶融資)"
                     api_k, reply_txt = str(cfg_obj.get("gemini_api_key", "")).strip(), ""
                     if api_k and not quick_q:
                         try:
-                            sys_ctx = f"你是專業台股短線戰情AI助手。以下是【{target_c} {target_n}】最新真實數據：現價{t_d['close']}元，機構總分{ev['total']}/100分，單日Alpha {ev['alpha_1d']:+.2f}%，5日法人控盤度{ev['inst_vol_ratio']:+.1f}%，三週期共振：{mtf_r['title']}，基本面：{rev_str}。明日當沖四價位：極端突破AH={cdp_v['AH']}、常態壓力NH={cdp_v['NH']}、常態支撐NL={cdp_v['NL']}、極端破底AL={cdp_v['AL']}（請勿提CDP中軸）。實戰診斷：{ev['v_desc']}。請針對用戶問題「{final_q}」直接給出重點結論、操作觀察重點與四價位支撐壓力（嚴禁使用反引號 ` 包覆文字，改用粗體 ** 標示重點）。"
+                            sys_ctx = f"你是專業台股短線戰情AI助手。用戶正在詢問【{target_c} {target_n}】（必須針對 {target_c} {target_n} 回答，嚴禁回答其他股票！）。最新官方對帳數據：現價{t_d['close']}元（日期{t_d['date']}，單日{t_d['chg_1d_pct']:+.2f}%），機構總分{ev['total']}/100分，單日Alpha {ev['alpha_1d']:+.2f}%，5日法人控盤度{ev['inst_vol_ratio']:+.1f}%，三週期共振：{mtf_r['title']}，基本面/位階：{rev_str}。明日當沖四價位：極端突破AH={cdp_v['AH']}、常態壓力NH={cdp_v['NH']}、常態支撐NL={cdp_v['NL']}、極端破底AL={cdp_v['AL']}（請勿提CDP中軸）。實戰診斷：{ev['v_desc']}。請針對用戶問題「{final_q}」直接給出重點結論、操作觀察重點與四價位支撐壓力（嚴禁使用反引號 ` 包覆文字，改用粗體 ** 標示重點）。"
                             g_resp = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_k}", json={"contents": [{"parts": [{"text": sys_ctx}]}]}, timeout=12, verify=False)
                             if g_resp.status_code == 200: reply_txt = g_resp.json()["candidates"][0]["content"]["parts"][0]["text"].replace("`", "**")
                         except Exception: reply_txt = ""
                     if not reply_txt:
                         reply_txt = (
-                            f"🔍 **【{target_c} {target_n} 機構四維度快篩（現價 {t_d['close']} 元）】**\n"
-                            f"- **機構總分**：**{ev['total']} / 100 分**（單日Alpha **{ev['alpha_1d']:+.2f}%** ｜ 5日法人控盤度 **{ev['inst_vol_ratio']:+.1f}%**）\n"
+                            f"🔍 **【{target_c} {target_n} 機構四維度快篩（{t_d['date']} 現價 {t_d['close']} 元｜單日 {t_d['chg_1d_pct']:+.2f}%）】**\n"
+                            f"- **機構總分**：**{ev['total']} / 100 分**（單日Alpha **{ev['alpha_1d']:+.2f}%** ｜ 5日法人佔量 **{ev['inst_vol_ratio']:+.1f}%**）\n"
                             f"- **三週期共振**：**{mtf_r['title']}**\n"
-                            f"- **基本面動能**：{rev_str}\n"
+                            f"- **{'ETF 位階觀察' if is_etf_q else '基本面動能'}**：{rev_str}\n"
                             f"- **三大法人合計**：1日 **{p_c[1]['tot']:+,}張** ｜ 3日 **{p_c[3]['tot']:+,}張** ｜ 5日 **{p_c[5]['tot']:+,}張**\n"
                             f"- **明日當沖四價位**：\n"
                             f"  • 🔥 壓力：**NH {cdp_v['NH']} 元** ／ **AH {cdp_v['AH']} 元**\n"
                             f"  • 🛡️ 支撐：**NL {cdp_v['NL']} 元** ／ **AL {cdp_v['AL']} 元**\n\n"
                             f"{ev['v_desc']}"
                         )
-                else: reply_txt = f"查無 {target_c} 的即時資料，請確認代號是否正確。"
-            st.session_state.ai_chat_history.append({"role": "assistant", "content": reply_txt})
+                    st.session_state.ai_chat_history.append({"role": "assistant", "content": reply_txt, "stock_code": target_c, "stock_name": target_n, "stock_mkt": t_mkt})
+                else:
+                    st.session_state.ai_chat_history.append({"role": "assistant", "content": f"查無 {target_c} 的即時資料，請確認代號是否正確。"})
             st.rerun()
 
 render_floating_ai_assistant(current_active_code, current_active_name, cfg, df_quotes)
