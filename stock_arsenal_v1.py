@@ -1,4 +1,4 @@
-# 檔案名稱：stock_arsenal_v1.py (v12.1 完美跳轉版：點擊切換按鈕自動收合小助手 + 強制跨分頁跳轉分頁1 + 100%保留對話紀錄)
+# 檔案名稱：stock_arsenal_v1.py (v12.2 選單100%同步版 + 走弱/走強原因智慧剖析 + 證交所28大精準產業刷新)
 import os, re, json, requests, importlib
 from datetime import datetime
 import pandas as pd
@@ -23,7 +23,7 @@ DEFAULT_STATES = {
         {"id": "📰", "name": "📰 近期市場消息與催化劑雷達", "show": True},
         {"id": "📐", "name": "📐 下個交易日 AH / NH / NL / AL 支撐壓力區間", "show": True},
     ],
-    "ai_chat_history": [{"role": "assistant", "content": "您好！我是戰情室 AI 助手 🤖。請點選上方快捷按鈕，或直接輸入任何**個股代號（如 3167、6214）**、**ETF 代號（如 0050、00878、00937B）**或**大盤問題**，我會立即調出官方真實數據為您統整實戰結論與 AH/NH/NL/AL 四價位！"}]
+    "ai_chat_history": [{"role": "assistant", "content": "您好！我是戰情室 AI 助手 🤖。您可以直接問我**「為什麼 00877 這麼弱？」**、**「怎麼看 3167？」**或**「6214 現在能買嗎？」**，我會結合官方真實 K 線、法人融資籌碼與最新新聞，為您剖析走強/走弱原因與 AH/NH/NL/AL 關鍵四價位！"}]
 }
 for k, v in DEFAULT_STATES.items():
     st.session_state.setdefault(k, v)
@@ -100,7 +100,6 @@ components.html(f"""<script>
     injectCSS(parentDoc);
     setInterval(() => {{ injectCSS(parentDoc); parentDoc.querySelectorAll('iframe').forEach(ifr => {{ try {{ if (ifr.contentDocument) injectCSS(ifr.contentDocument); }} catch (e) {{}} }}); }}, 800);
 
-    // 【v12.1 關鍵機制】當觸發跨頁跳轉時 (close_popover_seq 遞增)，自動收合展開中的小助手 Popover 並捲回頂部！
     const closeSeq = {int(st.session_state.get("close_popover_seq", 0))};
     if (closeSeq > 0 && window.parent._lastClosePopoverSeq !== closeSeq) {{
         window.parent._lastClosePopoverSeq = closeSeq;
@@ -493,11 +492,9 @@ def jump_to_tab1_with_stock(code_str, name_str="", mkt_str="TWSE"):
     st.session_state.target_stock_code = c_clean
     st.session_state.active_nav_tab = 1
     st.session_state.close_popover_seq = int(st.session_state.get("close_popover_seq", 0)) + 1
-    if "tab1_stock_sel_widget" in st.session_state:
-        del st.session_state["tab1_stock_sel_widget"]
 
 # ------------------------------------------------------------------
-# 【分頁 1：🔍 個股/ETF 三週期共振雷達 (含實戰綜合總結論 & AH/NH/NL/AL 四價位)】
+# 【分頁 1：🔍 個股/ETF 三週期共振雷達 (動態 key 確保選單 100% 同步不脫鉤)】
 # ------------------------------------------------------------------
 if cur_tab == 1:
     if check_tab_password_gate(1, "unlocked_tab1", cfg.get("lock_tab1", False), cfg.get("pwd_tab1", "VIP888"), "個股三週期技術與籌碼雷達", "輸入本季基礎 VIP 通行碼即可解鎖「日K/60分K/5分K三週期共振雷達與機構級評分」。", cfg["broker_line_url"]):
@@ -517,8 +514,19 @@ if cur_tab == 1:
             stock_options.insert(0, f"{target_c} {s_name_fb}{has_f_tag}")
 
         default_idx = next((i for i, opt in enumerate(stock_options) if opt.startswith(target_c + " ")), 0)
+        sel_box_key = f"tab1_sel_{target_c}"
+        def _on_user_change_stock():
+            val = st.session_state.get(sel_box_key, "")
+            if val: st.session_state.target_stock_code = val.split(" ")[0].strip().upper()
+
         sel_c1, sel_c2 = st.columns([6.8, 3.2])
-        selected_option = sel_c1.selectbox(f"📌 請直接輸入個股或 ETF 代號/名稱搜尋（目前共收錄 {len(stock_options):,} 檔上市櫃標的）：", options=stock_options, index=default_idx, key="tab1_stock_sel_widget")
+        selected_option = sel_c1.selectbox(
+            f"📌 請直接輸入個股或 ETF 代號/名稱搜尋（目前共收錄 {len(stock_options):,} 檔上市櫃標的）：",
+            options=stock_options,
+            index=default_idx,
+            key=sel_box_key,
+            on_change=_on_user_change_stock
+        )
         selected_code = selected_option.split(" ")[0].strip().upper()
         st.session_state.target_stock_code = selected_code
 
@@ -683,14 +691,14 @@ elif cur_tab == 2:
         render_fast_profit_calculator(cfg["broker_line_url"], is_public_promo)
 
 # ------------------------------------------------------------------
-# 【分頁 3：🚦 大盤 5 維度動態評分 & 全市場活水主流族群快篩】
+# 【分頁 3：🚦 大盤 5 維度動態評分 & 證交所 28 大精準產業主流族群快篩】
 # ------------------------------------------------------------------
 elif cur_tab == 3:
     if check_tab_password_gate(3, "unlocked_tab4", cfg.get("lock_tab4", False), cfg.get("pwd_tab4", "VIP888"), "大盤期現貨風向與主流族群雷達", "輸入本季基礎 VIP 通行碼即可解鎖「大盤資金風向球」與「全市場動態主流族群」。", cfg["broker_line_url"]):
         tb4_c1, tb4_c2 = st.columns([7.5, 2.5])
         tb4_c1.subheader("🚦 台股大盤資金風向球 & 實戰總結論")
         if tb4_c2.button("🔄 重新掃描族群與大盤", use_container_width=True):
-            for fn in (de.fetch_taiex_market_data, de._fetch_twse_official_taiex_kline, de.auto_sync_market_chips_cached, de.fetch_full_market_snapshot_and_breadth, de.scan_sector_performance):
+            for fn in (de.fetch_taiex_market_data, de._fetch_twse_official_taiex_kline, de.auto_sync_market_chips_cached, de.fetch_full_market_snapshot_and_breadth, de.fetch_all_stock_industry_map, de.scan_sector_performance):
                 try: fn.clear()
                 except Exception: pass
             st.rerun()
@@ -759,14 +767,14 @@ elif cur_tab == 3:
             - 🔥 <b>壓力區間：</b>常態反彈壓力 <b>NH {mkt_cdp['NH']:,} 點</b> ｜ 極端突破壓力 <b>AH {mkt_cdp['AH']:,} 點</b><br>
             - 🛡️ <b>支撐區間：</b>常態回檔支撐 <b>NL {mkt_cdp['NL']:,} 點</b> ｜ 極端破底支撐 <b>AL {mkt_cdp['AL']:,} 點</b></div>""", unsafe_allow_html=True)
 
-            with st.spinner("🔥 正在掃描全市場 2,100 檔動態活水並更新主流族群強弱排行..."):
+            with st.spinner("🔥 正在依證交所/櫃買官方 28 大細分產業掃描全市場動態活水..."):
                 sector_rank = de.scan_sector_performance(json.dumps(sector_map_all, ensure_ascii=False), margins_global_map)
 
             if sector_rank:
                 top3_sectors_str = "、".join([f"{s['族群名稱']}(近1日{s['近1日平均漲跌(%)']:+}% / 5日{s['近5日平均漲跌(%)']:+}%)" for s in sector_rank[:3]])
                 st.markdown(f"#### 🔥 台股主流族群「全市場 2,100 檔動態活水注入」強弱總覽（共 {len(sector_rank)} 大族群）")
-                st.caption(f"💡 **動態活水機制說明：** 系統自動從全市場 2,100 檔中抓取今日帶量轉強的新飆股，依官方產業歸入對應族群（標示 **🔥**），若有新興強勢產業則自動浮現為 **🌟 [動態主流]**！目前領漲前三強：**{top3_sectors_str}**")
-                df_sec_overview = pd.DataFrame([{"主流族群分類 (含動態浮現產業)": s["族群名稱"], "成分股數": s.get("成分股數", ""), "近1日平均漲跌(%)": s["近1日平均漲跌(%)"], "近5日(一週)平均漲跌(%)": s["近5日平均漲跌(%)"], "領漲指標股 (🔥代表今日全市場動態入榜)": s.get("近5日領漲指標股", "")} for s in sector_rank])
+                st.caption(f"💡 **官方 28 大細分產業動態活水說明：** 系統自動從全市場 2,100 檔中抓取今日帶量轉強的新飆股，依證交所/櫃買官方細分產業歸隊（標示 **🔥**），若有新興強勢次產業（如資訊服務與資安軟體、生技、營建等）則自動浮現為 **🌟 [動態主流]**！目前領漲前三強：**{top3_sectors_str}**")
+                df_sec_overview = pd.DataFrame([{"主流族群分類 (含動態浮現次產業)": s["族群名稱"], "成分股數": s.get("成分股數", ""), "近1日平均漲跌(%)": s["近1日平均漲跌(%)"], "近5日(一週)平均漲跌(%)": s["近5日平均漲跌(%)"], "領漲指標股 (🔥代表今日全市場動態入榜)": s.get("近5日領漲指標股", "")} for s in sector_rank])
                 st.dataframe(df_sec_overview.style.map(style_signed_numbers, subset=["近1日平均漲跌(%)", "近5日(一週)平均漲跌(%)"]).format({"近1日平均漲跌(%)": "{:+.2f}%", "近5日(一週)平均漲跌(%)": "{:+.2f}%"}), use_container_width=True, hide_index=True, height=410)
 
                 sec_options = [f"👉 {s['族群名稱']} （{s.get('成分股數','')}｜近1日 {s['近1日平均漲跌(%)']:+.2f}% ｜ 近5日 {s['近5日平均漲跌(%)']:+.2f}%）" for s in sector_rank]
@@ -787,7 +795,7 @@ elif cur_tab == 3:
             render_cta_box(m_cta_title, m_cta_btn, cfg["broker_line_url"])
 
 # ==========================================
-# 6. 右下角懸浮「🤖 AI 戰情助手」Popover (點擊切換按鈕自動收合小助手 + 強制全頁跳轉分頁1 + 保留對話)
+# 6. 右下角懸浮「🤖 AI 戰情助手」Popover (支援走弱/走強原因深度剖析 + Gemini新聞串接 + 選單100%同步跳轉)
 # ==========================================
 @st.fragment
 def render_floating_ai_assistant(active_code, active_name, cfg_obj, quotes_df):
@@ -798,10 +806,10 @@ def render_floating_ai_assistant(active_code, active_name, cfg_obj, quotes_df):
             st.session_state.ai_chat_history = [dict(DEFAULT_STATES["ai_chat_history"][0])]
             st.rerun()
 
-        st.caption(f"目前背景主畫面：**{active_code} {active_name}**（可直接輸入任何個股如 3167 或 ETF 如 0050、00937B 獨立提問）")
+        st.caption(f"目前背景主畫面：**{active_code} {active_name}**（可直接問「為什麼 00877 這麼弱？」或輸入任何代號提問）")
         q_col1, q_col2 = st.columns(2)
         quick_q = None
-        if q_col1.button(f"📊 診斷 {active_code} {active_name}", use_container_width=True): quick_q = f"請幫我診斷 {active_code} {active_name}"
+        if q_col1.button(f"📊 診斷 {active_code} {active_name}", use_container_width=True): quick_q = f"請幫我診斷 {active_code} {active_name} 近期強弱原因與四價位"
         if q_col2.button("🛡️ 大盤匯率費半與總結", use_container_width=True): quick_q = "請告訴我今日大盤5維度評分、匯率費半連動與實戰操作總結論"
 
         with st.container(height=310, border=True):
@@ -816,7 +824,7 @@ def render_floating_ai_assistant(active_code, active_name, cfg_obj, quotes_df):
                             jump_to_tab1_with_stock(btn_c, btn_n, btn_m)
                             st.rerun(scope="app")
 
-        user_in = st.chat_input("輸入個股(如 3167)、ETF(如 0050)或大盤問題...")
+        user_in = st.chat_input("問問題(如：為什麼00877這麼弱？怎麼看3167？)...")
         final_q = quick_q or user_in
         if final_q:
             st.session_state.ai_chat_history.append({"role": "user", "content": final_q})
@@ -861,28 +869,41 @@ def render_floating_ai_assistant(active_code, active_name, cfg_obj, quotes_df):
                     if target_n == target_c:
                         snap_m = de.fetch_full_market_snapshot_and_breadth().get("market_snap", {})
                         if target_c in snap_m: target_n = snap_m[target_c]["name"]
+                    n_d = de.fetch_stock_news(target_c, target_n).get("news", [])
                     ev = de.evaluate_three_pillars(t_d, c_d, BULL_COLOR, BEAR_COLOR, WARN_COLOR, tech_60m=t_60, tech_5m=t_5, margin_info=m_d, fund_info=f_d, taiex_info=tx_q, code_str=target_c)
                     cdp_v, p_c = de.calculate_cdp(t_d["high"], t_d["low"], t_d["close"]), c_d["periods"]
                     mtf_r = de.evaluate_mtf_resonance(t_d, t_60, t_5, cdp_v, BULL_COLOR, BEAR_COLOR, WARN_COLOR)
-                    is_etf_q = str(target_c).startswith("00")
-                    rev_str = f"{f_d['rev_month']} 營收 YoY **{f_d['yoy_latest']:+.1f}%** (加速度 **{f_d['yoy_accel']:+.1f}%**)" if (f_d.get("has_rev") and not is_etf_q) else f"ETF 均線乖離率 **{round(((t_d['close']-t_d['ma20'])/t_d['ma20'])*100, 2):+.2f}%** (留意低九與散戶融資)"
+                    smart_reasons_txt = de.build_smart_diagnostic_reasons(target_c, target_n, t_d, c_d, m_d, f_d, ev, n_d)
+
                     api_k, reply_txt = str(cfg_obj.get("gemini_api_key", "")).strip(), ""
                     if api_k and not quick_q:
                         try:
-                            sys_ctx = f"你是專業台股短線戰情AI助手。用戶正在詢問【{target_c} {target_n}】（必須針對 {target_c} {target_n} 回答，嚴禁回答其他股票！）。最新官方對帳數據：現價{t_d['close']}元（日期{t_d['date']}，單日{t_d['chg_1d_pct']:+.2f}%），機構總分{ev['total']}/100分，單日Alpha {ev['alpha_1d']:+.2f}%，5日法人控盤度{ev['inst_vol_ratio']:+.1f}%，三週期共振：{mtf_r['title']}，基本面/位階：{rev_str}。明日當沖四價位：極端突破AH={cdp_v['AH']}、常態壓力NH={cdp_v['NH']}、常態支撐NL={cdp_v['NL']}、極端破底AL={cdp_v['AL']}（請勿提CDP中軸）。實戰診斷：{ev['v_desc']}。請針對用戶問題「{final_q}」直接給出重點結論、操作觀察重點與四價位支撐壓力（嚴禁使用反引號 ` 包覆文字，改用粗體 ** 標示重點）。"
-                            g_resp = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_k}", json={"contents": [{"parts": [{"text": sys_ctx}]}]}, timeout=12, verify=False)
+                            news_titles = "；".join([x["title"] for x in n_d]) if n_d else "近期無特定重大新聞"
+                            sys_ctx = (
+                                f"你是專業台股實戰分析師AI助手。用戶正在提問：「{final_q}」（鎖定標的：【{target_c} {target_n}】）。\n"
+                                f"請根據以下 100% 真實數據直接回答用戶的問題（例如分析為什麼它最近這麼弱或這麼強、主力與散戶融資在做什麼、後續怎麼觀察）：\n"
+                                f"- 最新日期：{t_d['date']}，現價：{t_d['close']}元（單日 {t_d['chg_1d_pct']:+.2f}%，近5日 {t_d['chg_5d_pct']:+.2f}%）\n"
+                                f"- 均線位階：5MA={t_d['ma5']}、20MA(月線)={t_d['ma20']}、60MA(季線)={t_d['ma60']}、20日扣抵={t_d['deduct']}\n"
+                                f"- 機構評分：{ev['total']}/100分（單日Alpha {ev['alpha_1d']:+.2f}%，5日Alpha {ev['alpha_5d']:+.2f}%，5日法人佔成交量 {ev['inst_vol_ratio']:+.1f}%）\n"
+                                f"- 籌碼與資券：三大法人近1日 {p_c[1]['tot']:+,}張、近5日 {p_c[5]['tot']:+,}張（外資5日 {p_c[5]['f']:+,}、投信5日 {p_c[5]['t']:+,}）；近5日融資增減 {m_d['periods'][5]['m_chg']:+,}張（融資餘額 {m_d['margin_bal']:,}張）\n"
+                                f"- 三週期共振：{mtf_r['title']}\n"
+                                f"- 系統自動歸因摘要：{smart_reasons_txt}\n"
+                                f"- 近期新聞標題：{news_titles}\n"
+                                f"- 明日四價位：極端突破AH={cdp_v['AH']}、常態壓力NH={cdp_v['NH']}、常態支撐NL={cdp_v['NL']}、極端破底AL={cdp_v['AL']}（請勿提CDP中軸）。\n"
+                                f"回覆格式要求：1.先直接針對用戶問題給出犀利白話的結論與原因剖析；2.列出關鍵籌碼與技術位階意義；3.給出明日 AH/NH/NL/AL 操作觀察點。嚴禁使用反引號 ` 包覆文字，改用粗體 ** 標示重點。"
+                            )
+                            g_resp = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_k}", json={"contents": [{"parts": [{"text": sys_ctx}]}]}, timeout=14, verify=False)
                             if g_resp.status_code == 200: reply_txt = g_resp.json()["candidates"][0]["content"]["parts"][0]["text"].replace("`", "**")
                         except Exception: reply_txt = ""
+
                     if not reply_txt:
                         reply_txt = (
-                            f"🔍 **【{target_c} {target_n} 機構四維度快篩（{t_d['date']} 現價 {t_d['close']} 元｜單日 {t_d['chg_1d_pct']:+.2f}%）】**\n"
-                            f"- **機構總分**：**{ev['total']} / 100 分**（單日Alpha **{ev['alpha_1d']:+.2f}%** ｜ 5日法人佔量 **{ev['inst_vol_ratio']:+.1f}%**）\n"
-                            f"- **三週期共振**：**{mtf_r['title']}**\n"
-                            f"- **{'ETF 位階觀察' if is_etf_q else '基本面動能'}**：{rev_str}\n"
-                            f"- **三大法人合計**：1日 **{p_c[1]['tot']:+,}張** ｜ 3日 **{p_c[3]['tot']:+,}張** ｜ 5日 **{p_c[5]['tot']:+,}張**\n"
-                            f"- **明日當沖四價位**：\n"
-                            f"  • 🔥 壓力：**NH {cdp_v['NH']} 元** ／ **AH {cdp_v['AH']} 元**\n"
-                            f"  • 🛡️ 支撐：**NL {cdp_v['NL']} 元** ／ **AL {cdp_v['AL']} 元**\n\n"
+                            f"🔍 **【{target_c} {target_n} 機構四維度快篩（{t_d['date']} 現價 {t_d['close']} 元｜單日 {t_d['chg_1d_pct']:+.2f}% ／ 5日 {t_d['chg_5d_pct']:+.2f}%）】**\n"
+                            f"- **機構總分**：**{ev['total']} / 100 分**｜**三週期**：**{mtf_r['title']}**\n\n"
+                            f"{smart_reasons_txt}\n\n"
+                            f"📐 **【明日當沖四價位與操作應對】**：\n"
+                            f"- 🔥 **上檔壓力**：常態壓力 **NH {cdp_v['NH']} 元** ／ 極端突破 **AH {cdp_v['AH']} 元**\n"
+                            f"- 🛡️ **下檔支撐**：常態支撐 **NL {cdp_v['NL']} 元** ／ 極端破底 **AL {cdp_v['AL']} 元**\n\n"
                             f"{ev['v_desc']}"
                         )
                     st.session_state.ai_chat_history.append({"role": "assistant", "content": reply_txt, "stock_code": target_c, "stock_name": target_n, "stock_mkt": t_mkt})
