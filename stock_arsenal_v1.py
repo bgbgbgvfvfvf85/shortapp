@@ -1,4 +1,7 @@
-# 檔案名稱：stock_arsenal_v1.py (v12.3 精簡無損版：AI連線燈號與錯誤透明化 + 選單100%同步 + 證交所28大精準產業)
+# ==============================================================================
+# ⚠️ 【重要防呆提醒】本檔案是：stock_arsenal_v1.py (前端主畫面)
+# 請確認 GitHub 網頁頂端的檔名是 stock_arsenal_v1.py 再貼上！切勿貼到 data_engine.py！
+# ==============================================================================
 import os, re, json, importlib
 from datetime import datetime
 import pandas as pd
@@ -55,6 +58,7 @@ div[data-baseweb="popover"] > div, div[data-testid="stPopoverBody"] {{ backgroun
 div[data-testid="stPopoverBody"] * {{ color: {TEXT_MAIN} !important; }}
 div[data-testid="stPopoverBody"] .stButton > button {{ background-color: {BG_MAIN} !important; border: 1px solid #4A90E2 !important; border-radius: 8px !important; }}
 div[data-testid="stPopoverBody"] .stButton > button[kind="primary"] {{ background: linear-gradient(135deg, #1E3A8A 0%, #2563EB 100%) !important; color: #FFF !important; }}
+div[data-testid="stPopoverBody"] .stButton > button[kind="primary"] * {{ color: #FFF !important; }}
 div[data-testid="stPopoverBody"] [data-testid="stChatMessage"] {{ background-color: {CARD_BG_ALT} !important; border: 1px solid {CARD_BORDER} !important; border-radius: 8px !important; padding: 8px 10px !important; margin-bottom: 6px !important; }}
 div[data-testid="stPopoverBody"] [data-testid="stChatInput"] > div {{ background-color: {BG_MAIN} !important; border: 1px solid {CARD_BORDER} !important; }}
 @media (max-width: 768px) {{ .block-container {{ padding: 2.2rem 0.65rem 5.5rem 0.65rem !important; }} div[data-testid="stPopover"] {{ bottom: 68px !important; right: 12px !important; }} }}
@@ -92,7 +96,7 @@ components.html(f"""<script>
 
 top_c1, top_c2 = st.columns([6.8, 3.2])
 top_c1.markdown('<div class="app-main-title">⚡ 個股衍生武器庫 & 短線當沖戰情室</div>', unsafe_allow_html=True)
-with top_c2.expander("⚙️ 顯示設定（深淺色 ／ 字體）"):
+with top_c2.expander("⚙️ 顯示設定（切換深淺色 ／ 字體大小）"):
     b1, b2, b3 = st.columns(3)
     b1.button("☀️淺色" if is_dark else "🌙深色", use_container_width=True, on_click=toggle_theme)
     b2.button("➖縮小", use_container_width=True, on_click=dec_font)
@@ -300,6 +304,12 @@ def jump_to_tab1_with_stock(code_str, name_str="", mkt_str="TWSE"):
 
 if cur_tab == 1:
     if check_tab_password_gate(1, "unlocked_tab1", cfg.get("lock_tab1", False), cfg.get("pwd_tab1", "VIP888"), "個股三週期技術與籌碼雷達", "請輸入 VIP 通行碼解鎖。", cfg["broker_line_url"]):
+        def _move_mod(idx, d):
+            items = st.session_state.tab1_master_items
+            if 0 <= idx + d < len(items): items[idx], items[idx + d] = items[idx + d], items[idx]
+        def _toggle_mod(idx): st.session_state.tab1_master_items[idx]["show"] = not st.session_state.tab1_master_items[idx]["show"]
+        def _reset_mod(): st.session_state.tab1_master_items = [dict(x) for x in DEFAULT_STATES["tab1_master_items"]]
+
         target_c = str(st.session_state.target_stock_code).strip().upper()
         if not any(opt.startswith(target_c + " ") for opt in stock_options):
             dyn_m = st.session_state.get("dynamic_stock_meta", {}).get(target_c, {})
@@ -319,7 +329,7 @@ if cur_tab == 1:
         market_hint = code_to_mkt_map.get(selected_code, "TPEX" if selected_code.endswith("B") else "TWSE")
         current_active_code, current_active_name = selected_code, stock_name
 
-        with st.spinner(f"正在對帳【{selected_code} {stock_name}】官方真實日K、三週期共振与籌碼..."):
+        with st.spinner(f"正在對帳【{selected_code} {stock_name}】官方真實日K、三週期共振與籌碼..."):
             tech = de.fetch_technical_indicators(selected_code, market_hint)
             tech_60m = de.fetch_intraday_kline_full(selected_code, market_hint, "60m")
             tech_5m = de.fetch_intraday_kline_full(selected_code, market_hint, "5m")
@@ -331,9 +341,19 @@ if cur_tab == 1:
 
         if not tech["ok"]: st.error(f"無法取得 {selected_code} 資料。"); st.stop()
         close_price, ma20_price, ma60_price, deduct_price, trade_date = tech["close"], tech["ma20"], tech["ma60"], tech["deduct"], tech["date"]
+        k_val, d_val, rsi_val, vol_ratio, td_b_cnt, td_s_cnt = tech["K"], tech["D"], tech["rsi"], tech["vol_ratio"], tech["td_buy"], tech["td_sell"]
         cdp_vals = de.calculate_cdp(tech["high"], tech["low"], close_price)
         sel_c2.markdown("<div style='padding-top:10px;'></div>", unsafe_allow_html=True)
         sel_c2.button(f"🧮 帶入【{stock_name} {close_price}元】算當沖損益 ➔", use_container_width=True, on_click=jump_to_tab2_with_price, args=(close_price,))
+
+        with st.expander("🎛️ 點此展開【自訂版面模組順序 & 顯示開關】（可點 ⬆️ / ⬇️ 自由上下移動板塊）"):
+            for i, m_item in enumerate(st.session_state.tab1_master_items):
+                mc1, mc2, mc3, mc4 = st.columns([0.8, 6.8, 1.2, 1.2])
+                mc1.checkbox("顯示", value=m_item["show"], key=f"mod_chk_{m_item['id']}", label_visibility="collapsed", on_change=_toggle_mod, args=(i,))
+                mc2.markdown(f"<div style='padding-top:6px; font-weight:bold; color:{TEXT_MAIN if m_item['show'] else TEXT_MUTED};'>第 {i+1} 順位：{m_item['name']}</div>", unsafe_allow_html=True)
+                mc3.button("⬆️ 上移", key=f"mod_up_{m_item['id']}", disabled=(i == 0), use_container_width=True, on_click=_move_mod, args=(i, -1))
+                mc4.button("⬇️ 下移", key=f"mod_dn_{m_item['id']}", disabled=(i == len(st.session_state.tab1_master_items) - 1), use_container_width=True, on_click=_move_mod, args=(i, 1))
+            st.button("🔄 恢復預設順序與全部顯示", use_container_width=True, on_click=_reset_mod)
 
         eval_res = de.evaluate_three_pillars(tech, chip, BULL_COLOR, BEAR_COLOR, WARN_COLOR, tech_60m=tech_60m, tech_5m=tech_5m, margin_info=margin_info, fund_info=fund_info, taiex_info=taiex_quick, code_str=selected_code)
         st.subheader(f"📊 【{selected_code} {stock_name}】機構級四維度共振體檢 & 實戰總結論")
@@ -348,33 +368,71 @@ if cur_tab == 1:
         with st.expander(f"🧮 查看【{stock_name} {eval_res['total']} / 100 分】4 大維度計分明細"):
             st.dataframe(pd.DataFrame(eval_res["breakdown"], columns=["評估維度", "本項得分", "客觀數據動態計分依據"]), use_container_width=True, hide_index=True)
 
+        t_pct, m_pct, c_pct, f_pct = int((eval_res["t_score"]/25.0)*100), int((eval_res["m_score"]/25.0)*100), int((eval_res["c_score"]/30.0)*100), int((eval_res["f_score"]/20.0)*100)
         p_chip = chip["periods"]
-        mtf_res = de.evaluate_mtf_resonance(tech, tech_60m, tech_5m, cdp_vals, BULL_COLOR, BEAR_COLOR, WARN_COLOR)
-        st.markdown(f"##### 🎯 【{selected_code} {stock_name}】日 K × 60 分 K × 5 分 K「三週期多空共振雷達」")
-        st.markdown(f"""<div class="metric-card" style="border-left:5px solid {mtf_res['color']};"><div style="font-weight:bold; color:{mtf_res['color']};">{mtf_res['title']}</div><div>{mtf_res['desc']}</div></div>""", unsafe_allow_html=True)
-        st.dataframe(pd.DataFrame(mtf_res["table"]), use_container_width=True, hide_index=True)
+        td_str = f"▲低九第 {td_b_cnt} 天" if td_b_cnt > 0 else (f"▼高九第 {td_s_cnt} 天" if td_s_cnt > 0 else "⚪ 無九轉")
+        if fund_info.get("has_rev") and not selected_code.startswith("00"):
+            rev_main = f"YoY {fund_info['yoy_latest']:+.1f}%"
+            rev_sub = f"- <b>{fund_info['rev_month']} 加速度：</b><b>{fund_info['yoy_accel']:+.1f}%</b><br>- <b>外資持股：</b>{fund_info['foreign_hold_pct']}%"
+        else:
+            bias_etf = round(((close_price - ma20_price) / ma20_price) * 100.0, 2) if ma20_price > 0 else 0.0
+            rev_main = f"融資 {margin_info['margin_bal']:,} 張" if margin_info["eligible"] else "🏦 ETF 模式"
+            rev_sub = f"- <b>月線乖離：</b><b>{bias_etf:+.2f}%</b><br>- <b>融資單日：</b>{fmt_colored_num(margin_info['margin_chg'])}"
 
-        c_k1, c_k2, c_k3 = st.columns(3)
-        s_bb, s_td, s_cdp = c_k1.checkbox("🟣 布林通道", True, key="s_bb"), c_k2.checkbox("🔢 神奇九轉", True, key="s_td"), c_k3.checkbox("📐 AH/NH/NL/AL 四價位線", True, key="s_cdp")
-        kt1, kt2, kt3 = st.tabs(["📅 1. 日 K 實戰圖", "⏱️ 2. 60 分 K 波段圖", "⚡ 3. 5 分 K 當沖圖"])
-        with kt1: st.plotly_chart(plot_universal_kline_chart(tech["kline_60"], scale, s_bb, s_td, s_cdp, cdp_vals, False), use_container_width=True, theme=None)
-        with kt2:
-            if tech_60m["ok"]: st.plotly_chart(plot_universal_kline_chart(tech_60m["records"], scale, s_bb, s_td, s_cdp, cdp_vals, True), use_container_width=True, theme=None)
-        with kt3:
-            if tech_5m["ok"]: st.plotly_chart(plot_universal_kline_chart(tech_5m["records"], scale, s_bb, s_td, s_cdp, cdp_vals, True), use_container_width=True, theme=None)
+        st.markdown(f"""<div class="pillar-grid">
+        <div class="pillar-card"><div class="pillar-title"><span>🛡️ 1. Alpha & 均線</span><span class="{'tag-bull' if eval_res['alpha_1d']>=0 else 'tag-bear'}">Alpha {eval_res['alpha_1d']:+.1f}%</span></div><div class="pillar-main">月線 {ma20_price} 元</div><div class="bar-bg"><div style="width:{t_pct}%; height:100%; background:{BULL_COLOR if t_pct>=60 else BEAR_COLOR};"></div></div><div class="pillar-sub">- <b>5日Alpha：</b>{eval_res['alpha_5d']:+.2f}%<br>- <b>20日扣抵：</b>{deduct_price} 元｜5MA {tech['ma5']}</div></div>
+        <div class="pillar-card"><div class="pillar-title"><span>⚡ 2. 三週期動能</span><span class="{'tag-bull' if k_val>=d_val else 'tag-bear'}">{'KD金叉' if k_val>=d_val else 'KD死叉'}</span></div><div class="pillar-main">K：{k_val}｜D：{d_val}</div><div class="bar-bg"><div style="width:{m_pct}%; height:100%; background:{BULL_COLOR if m_pct>=60 else BEAR_COLOR};"></div></div><div class="pillar-sub">- <b>60/5分 20MA：</b>{tech_60m.get('ma20','-')}／{tech_5m.get('ma20','-')}<br>- <b>九轉：</b>{td_str}｜量比 {vol_ratio}倍</div></div>
+        <div class="pillar-card"><div class="pillar-title"><span>💰 3. 法人 & 資券</span><span class="{'tag-bull' if eval_res['inst_vol_ratio']>0 else 'tag-bear'}">佔量 {eval_res['inst_vol_ratio']:+.1f}%</span></div><div class="pillar-main">5日 {fmt_colored_num(p_chip[5]['tot'])}</div><div class="bar-bg"><div style="width:{c_pct}%; height:100%; background:{BULL_COLOR if c_pct>=60 else BEAR_COLOR};"></div></div><div class="pillar-sub">- <b>1日/3日：</b>{fmt_colored_num(p_chip[1]['tot'])}／{fmt_colored_num(p_chip[3]['tot'])}<br>- <b>5日資增減：</b>{fmt_colored_num(margin_info['periods'][5]['m_chg'])}</div></div>
+        <div class="pillar-card"><div class="pillar-title"><span>🚀 4. 營收 / 位階</span><span class="tag-neutral">基本面</span></div><div class="pillar-main">{rev_main}</div><div class="bar-bg"><div style="width:{f_pct}%; height:100%; background:#3498DB;"></div></div><div class="pillar-sub">{rev_sub}<br>- <b>10/20日法人：</b>{fmt_colored_num(p_chip[10]['tot'])}／{fmt_colored_num(p_chip[20]['tot'])}</div></div></div>""", unsafe_allow_html=True)
 
-        bt1, bt2 = st.tabs(["📊 三大法人買賣超直方圖", "📊 融資融券增減 & 券資比"])
-        with bt1:
-            if chip["ok"] and chip["daily_table"]: st.plotly_chart(plot_20d_chip_bar_chart(chip["daily_table"], scale), use_container_width=True, theme=None)
-        with bt2:
-            if margin_info["ok"] and margin_info["daily_table"]: st.plotly_chart(plot_20d_margin_bar_chart(margin_info["daily_table"], scale), use_container_width=True, theme=None)
+        for sec_item in [x["id"] for x in st.session_state.tab1_master_items if x["show"]]:
+            if sec_item == "🕯️":
+                mtf_res = de.evaluate_mtf_resonance(tech, tech_60m, tech_5m, cdp_vals, BULL_COLOR, BEAR_COLOR, WARN_COLOR)
+                st.markdown(f"##### 🎯 【{selected_code} {stock_name}】日 K × 60 分 K × 5 分 K「三週期多空共振雷達」")
+                st.markdown(f"""<div class="metric-card" style="border-left:5px solid {mtf_res['color']};"><div style="font-weight:bold; color:{mtf_res['color']};">{mtf_res['title']}</div><div>{mtf_res['desc']}</div></div>""", unsafe_allow_html=True)
+                st.dataframe(pd.DataFrame(mtf_res["table"]), use_container_width=True, hide_index=True)
+                c_k1, c_k2, c_k3 = st.columns(3)
+                s_bb, s_td, s_cdp = c_k1.checkbox("🟣 布林通道", True, key="s_bb"), c_k2.checkbox("🔢 神奇九轉", True, key="s_td"), c_k3.checkbox("📐 AH/NH/NL/AL 四價位線", True, key="s_cdp")
+                kt1, kt2, kt3 = st.tabs(["📅 1. 日 K 實戰圖", "⏱️ 2. 60 分 K 波段圖", "⚡ 3. 5 分 K 當沖圖"])
+                with kt1: st.plotly_chart(plot_universal_kline_chart(tech["kline_60"], scale, s_bb, s_td, s_cdp, cdp_vals, False), use_container_width=True, theme=None)
+                with kt2:
+                    if tech_60m["ok"]: st.plotly_chart(plot_universal_kline_chart(tech_60m["records"], scale, s_bb, s_td, s_cdp, cdp_vals, True), use_container_width=True, theme=None)
+                with kt3:
+                    if tech_5m["ok"]: st.plotly_chart(plot_universal_kline_chart(tech_5m["records"], scale, s_bb, s_td, s_cdp, cdp_vals, True), use_container_width=True, theme=None)
+            elif sec_item == "📊":
+                bt1, bt2 = st.tabs(["📊 三大法人買賣超直方圖", "📊 融資融券增減 & 券資比"])
+                with bt1:
+                    if chip["ok"] and chip["daily_table"]: st.plotly_chart(plot_20d_chip_bar_chart(chip["daily_table"], scale), use_container_width=True, theme=None)
+                with bt2:
+                    if margin_info["ok"] and margin_info["daily_table"]: st.plotly_chart(plot_20d_margin_bar_chart(margin_info["daily_table"], scale), use_container_width=True, theme=None)
+            elif sec_item == "📋":
+                tbl1, tbl2, tbl3 = st.tabs(["🎯 1. 五週期累計矩陣", "📋 2. 法人逐日明細", "📋 3. 資券逐日明細"])
+                with tbl1:
+                    p_mg = margin_info["periods"]
+                    m_rows = [{"籌碼主體": lbl, **{f"近 {w} 日": p_chip[w][k] for w in [1, 3, 5, 10, 20]}} for lbl, k in [("🌍 外資 (張)", "f"), ("🏦 投信 (張)", "t"), ("🏢 自營商 (張)", "d"), ("💰 法人合計 (張)", "tot")]]
+                    if margin_info["ok"] and margin_info["eligible"]:
+                        m_rows.extend([{"籌碼主體": "📈 融資增減 (張)", **{f"近 {w} 日": p_mg[w]["m_chg"] for w in [1, 3, 5, 10, 20]}}, {"籌碼主體": "📉 融券增減 (張)", **{f"近 {w} 日": p_mg[w]["s_chg"] for w in [1, 3, 5, 10, 20]}}])
+                    p_cols = ["近 1 日", "近 3 日", "近 5 日", "近 10 日", "近 20 日"]
+                    st.dataframe(pd.DataFrame(m_rows).style.map(style_signed_numbers, subset=p_cols).format({c: "{:+,}" for c in p_cols}), use_container_width=True, hide_index=True)
+                with tbl2:
+                    if chip["ok"] and chip["daily_table"]:
+                        nc = ["外資買賣超(張)", "投信買賣超(張)", "自營商買賣超(張)", "三大法人合計(張)"]
+                        st.dataframe(pd.DataFrame(chip["daily_table"]).style.map(style_signed_numbers, subset=nc).format({c: "{:+,}" for c in nc}), use_container_width=True, hide_index=True)
+                with tbl3:
+                    if margin_info["ok"] and margin_info["daily_table"]:
+                        st.dataframe(pd.DataFrame(margin_info["daily_table"]).style.map(style_signed_numbers, subset=["融資增減(張)", "融券增減(張)"]), use_container_width=True, hide_index=True)
+            elif sec_item == "📰":
+                with st.container(border=True):
+                    st.markdown("📰 **近期市場消息與催化劑雷達：**")
+                    if news_data["news"]:
+                        for n in news_data["news"]:
+                            st.markdown(f"""<div class="news-card"><span style="background:#2D3748; color:#63B3ED; padding:2px 6px; border-radius:4px; font-size:12px; margin-right:6px;">{n['tag']}</span><span style="color:{TEXT_MUTED}; font-size:12px; margin-right:8px;">🕒 {n['ago']}</span><a href="{n['link']}" target="_blank" style="color:{TEXT_MAIN}; text-decoration:none;">{n['title']}</a></div>""", unsafe_allow_html=True)
+                    else: st.caption("近期無重大個股新聞。")
+            elif sec_item == "📐":
+                st.markdown(f"""<div class="metric-card"><h4>📐 下個交易日【{stock_name} AH / NH / NL / AL 當沖支撐壓力四價位】</h4>
+                - 🔥 <b>壓力區間：</b>常態反彈壓力 <b>NH {cdp_vals['NH']} 元</b> ｜ 極端突破壓力 <b>AH {cdp_vals['AH']} 元</b><br>
+                - 🛡️ <b>支撐區間：</b>常態回檔支撐 <b>NL {cdp_vals['NL']} 元</b> ｜ 極端破底支撐 <b>AL {cdp_vals['AL']} 元</b></div>""", unsafe_allow_html=True)
 
-        with st.container(border=True):
-            st.markdown("📰 **近期市場消息與催化劑雷達：**")
-            if news_data["news"]:
-                for n in news_data["news"]:
-                    st.markdown(f"""<div class="news-card"><span style="background:#2D3748; color:#63B3ED; padding:2px 6px; border-radius:4px; font-size:12px; margin-right:6px;">{n['tag']}</span><span style="color:{TEXT_MUTED}; font-size:12px; margin-right:8px;">🕒 {n['ago']}</span><a href="{n['link']}" target="_blank" style="color:{TEXT_MAIN}; text-decoration:none;">{n['title']}</a></div>""", unsafe_allow_html=True)
-            else: st.caption("近期無重大個股新聞。")
         render_cta_box(f"💬 想索取【{selected_code} {stock_name}】主力分點籌碼或討論策略嗎？", "💬 點此私訊專屬營業員諮詢", cfg["broker_line_url"])
 
 elif cur_tab == 2:
@@ -430,7 +488,7 @@ def render_floating_ai_assistant(active_code, active_name, cfg_obj, quotes_df):
             st.session_state.ai_chat_history = [dict(DEFAULT_STATES["ai_chat_history"][0])]; st.rerun()
 
         api_k = str(cfg_obj.get("gemini_api_key", "")).strip()
-        k_status = f"🟢 已載入 Gemini 金鑰 (`{api_k[:5]}...`)" if api_k else "⚪ 未設定金鑰 (使用內建歸因引擎)"
+        k_status = f"🟢 已載入 Gemini 金鑰 (**{api_k[:5]}...**)" if api_k else "⚪ 未設定金鑰 (使用內建歸因引擎)"
         st.caption(f"主畫面：**{active_code} {active_name}** ｜ 狀態：{k_status}")
 
         q_col1, q_col2 = st.columns(2)
