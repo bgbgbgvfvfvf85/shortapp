@@ -1,5 +1,5 @@
 # ==============================================================================
-# ⚠️ 【重要防呆提醒】本檔案是：stock_arsenal_v1.py (前端主畫面 v12.5)
+# ⚠️ 【重要防呆提醒】本檔案是：stock_arsenal_v1.py (前端主畫面 v12.6)
 # 請確認 GitHub 網頁頂端的檔名是 stock_arsenal_v1.py 再貼上！切勿貼到 data_engine.py！
 # ==============================================================================
 import os, re, json, importlib
@@ -26,7 +26,7 @@ DEFAULT_STATES = {
         {"id": "📰", "name": "📰 近期市場消息與催化劑雷達", "show": True},
         {"id": "📐", "name": "📐 下個交易日 AH / NH / NL / AL 支撐壓力區間", "show": True},
     ],
-    "ai_chat_history": [{"role": "assistant", "content": "您好！我是戰情室 AI 助手 🤖。請直接問我**「為什麼 00877 這麼弱？」**、**「怎麼看 3167？」**或**「6214 能買嗎？」**，我會結合官方真實數據與新聞為您剖析原因與 AH/NH/NL/AL 價位！"}]
+    "ai_chat_history": [{"role": "assistant", "content": "您好！我是戰情室 AI 助手 🤖。請直接問我**「為什麼 00877 這麼弱？」**、**「怎麼看 00406A？」**或**「3167 能買嗎？」**，我會結合官方真實數據與新聞為您剖析原因與 AH/NH/NL/AL 價位！"}]
 }
 for k, v in DEFAULT_STATES.items(): st.session_state.setdefault(k, v)
 
@@ -55,7 +55,8 @@ div[data-testid="stPopover"] {{ position: fixed !important; bottom: 24px !import
 div[data-testid="stPopover"] > div, div[data-testid="stPopover"] > div > button, div[data-testid="stPopover"] > button {{ width: auto !important; background: linear-gradient(135deg, #00D26A 0%, #009E4F 100%) !important; color: #000000 !important; border-radius: 50px !important; padding: 10px 18px !important; font-size: 15px !important; font-weight: 800 !important; border: 2px solid #FFFFFF !important; box-shadow: 0 6px 20px rgba(0,210,106,0.55) !important; white-space: nowrap !important; }}
 div[data-testid="stPopover"] > div > button *, div[data-testid="stPopover"] > button * {{ color: #000000 !important; font-weight: 800 !important; }}
 div[data-baseweb="popover"] > div, div[data-testid="stPopoverBody"] {{ background-color: {CARD_BG} !important; color: {TEXT_MAIN} !important; border: 1.5px solid #4A90E2 !important; border-radius: 14px !important; max-width: 92vw !important; }}
-div[data-testid="stPopoverBody"] h1, div[data-testid="stPopoverBody"] h2, div[data-testid="stPopoverBody"] h3, div[data-testid="stPopoverBody"] h4, div[data-testid="stPopoverBody"] p, div[data-testid="stPopoverBody"] span, div[data-testid="stPopoverBody"] li, div[data-testid="stPopoverBody"] strong, div[data-testid="stPopoverBody"] b, div[data-testid="stPopoverBody"] div[data-testid="stCaptionContainer"] {{ color: {TEXT_MAIN} !important; }}
+div[data-testid="stPopoverBody"] h1, div[data-testid="stPopoverBody"] h2, div[data-testid="stPopoverBody"] h3, div[data-testid="stPopoverBody"] h4 {{ font-size: 16px !important; line-height: 1.4 !important; margin: 6px 0 !important; color: {TEXT_MAIN} !important; }}
+div[data-testid="stPopoverBody"] p, div[data-testid="stPopoverBody"] span, div[data-testid="stPopoverBody"] li, div[data-testid="stPopoverBody"] strong, div[data-testid="stPopoverBody"] b, div[data-testid="stPopoverBody"] div[data-testid="stCaptionContainer"] {{ color: {TEXT_MAIN} !important; font-size: 14.5px !important; line-height: 1.6 !important; }}
 div[data-testid="stPopoverBody"] .stButton > button {{ background-color: {BG_MAIN} !important; color: {TEXT_MAIN} !important; border: 1px solid #4A90E2 !important; border-radius: 8px !important; }}
 div[data-testid="stPopoverBody"] .stButton > button * {{ color: {TEXT_MAIN} !important; }}
 div[data-testid="stPopoverBody"] .stButton > button[kind="primary"] {{ background: linear-gradient(135deg, #1E3A8A 0%, #2563EB 100%) !important; color: #FFFFFF !important; border: 1.5px solid #60A5FA !important; }}
@@ -391,7 +392,7 @@ if cur_tab == 1:
             news_data = de.fetch_stock_news(selected_code, stock_name)
 
         if not tech["ok"]: st.error(f"無法取得 {selected_code} 資料。"); st.stop()
-        close_price, ma20_price, ma60_price, deduct_price, trade_date = tech["close"], tech["ma20"], tech["ma60"], tech["deduct"], tech["date"]
+        close_price, prev_close_p, ma20_price, ma60_price, deduct_price, trade_date = tech["close"], tech.get("prev_close", tech["close"]), tech["ma20"], tech["ma60"], tech["deduct"], tech["date"]
         k_val, d_val, rsi_val, vol_ratio, td_b_cnt, td_s_cnt = tech["K"], tech["D"], tech["rsi"], tech["vol_ratio"], tech["td_buy"], tech["td_sell"]
         cdp_vals = de.calculate_cdp(tech["high"], tech["low"], close_price)
         sel_c2.markdown("<div style='padding-top:10px;'></div>", unsafe_allow_html=True)
@@ -408,7 +409,7 @@ if cur_tab == 1:
 
         eval_res = de.evaluate_three_pillars(tech, chip, BULL_COLOR, BEAR_COLOR, WARN_COLOR, tech_60m=tech_60m, tech_5m=tech_5m, margin_info=margin_info, fund_info=fund_info, taiex_info=taiex_quick, code_str=selected_code)
         st.subheader(f"📊 【{selected_code} {stock_name}】機構級四維度共振體檢 & 實戰總結論")
-        st.markdown(f"<p style='font-size:{round(14*scale,1)}px; color:{TEXT_MUTED}; margin-top:-10px;'>📅 <b>最新有效交易日：{trade_date}</b> ｜ 最新價：<b>{close_price} 元</b>（單日 <b>{tech['chg_1d_pct']:+.2f}%</b> ／ Alpha <b>{eval_res['alpha_1d']:+.2f}%</b>） ｜ 市場：<b>{'上市' if market_hint=='TWSE' else '上櫃'}</b></p>", unsafe_allow_html=True)
+        st.markdown(f"<p style='font-size:{round(14*scale,1)}px; color:{TEXT_MUTED}; margin-top:-10px;'>📅 <b>最新交易日：{trade_date}</b> ｜ 最新現價：<b>{close_price} 元</b>（昨收 <b>{prev_close_p} 元</b> ／ 單日 <b>{tech['chg_1d_pct']:+.2f}%</b> ／ Alpha <b>{eval_res['alpha_1d']:+.2f}%</b>） ｜ 20MA月線均價：<b>{ma20_price} 元</b></p>", unsafe_allow_html=True)
         st.markdown(f"""<div class="score-banner"><div style="flex:1; min-width:240px;">
         <div style="font-size:{round(19*scale,1)}px; font-weight:bold; color:{eval_res['v_color']}; margin-bottom:8px;">{eval_res['verdict']}</div>
         <div style="font-size:{round(14.2*scale,1)}px; line-height:1.7; background:{SCORE_BOX_BG}; padding:10px 14px; border-radius:8px; border-left:4px solid {eval_res['v_color']};">{eval_res['v_desc_html']}</div></div>
@@ -431,7 +432,7 @@ if cur_tab == 1:
             rev_sub = f"- <b>月線乖離：</b><b>{bias_etf:+.2f}%</b><br>- <b>融資單日：</b>{fmt_colored_num(margin_info['margin_chg'])}"
 
         st.markdown(f"""<div class="pillar-grid">
-        <div class="pillar-card"><div class="pillar-title"><span>🛡️ 1. Alpha & 均線</span><span class="{'tag-bull' if eval_res['alpha_1d']>=0 else 'tag-bear'}">Alpha {eval_res['alpha_1d']:+.1f}%</span></div><div class="pillar-main">月線 {ma20_price} 元</div><div class="bar-bg"><div style="width:{t_pct}%; height:100%; background:{BULL_COLOR if t_pct>=60 else BEAR_COLOR};"></div></div><div class="pillar-sub">- <b>5日Alpha：</b>{eval_res['alpha_5d']:+.2f}%<br>- <b>20日扣抵：</b>{deduct_price} 元｜5MA {tech['ma5']}</div></div>
+        <div class="pillar-card"><div class="pillar-title"><span>🛡️ 1. Alpha & 均線</span><span class="{'tag-bull' if eval_res['alpha_1d']>=0 else 'tag-bear'}">Alpha {eval_res['alpha_1d']:+.1f}%</span></div><div class="pillar-main">20MA月線 {ma20_price} 元</div><div class="bar-bg"><div style="width:{t_pct}%; height:100%; background:{BULL_COLOR if t_pct>=60 else BEAR_COLOR};"></div></div><div class="pillar-sub">- <b>5日Alpha：</b>{eval_res['alpha_5d']:+.2f}%<br>- <b>20日扣抵：</b>{deduct_price} 元｜5MA {tech['ma5']}</div></div>
         <div class="pillar-card"><div class="pillar-title"><span>⚡ 2. 三週期動能</span><span class="{'tag-bull' if k_val>=d_val else 'tag-bear'}">{'KD金叉' if k_val>=d_val else 'KD死叉'}</span></div><div class="pillar-main">K：{k_val}｜D：{d_val}</div><div class="bar-bg"><div style="width:{m_pct}%; height:100%; background:{BULL_COLOR if m_pct>=60 else BEAR_COLOR};"></div></div><div class="pillar-sub">- <b>60/5分 20MA：</b>{tech_60m.get('ma20','-')}／{tech_5m.get('ma20','-')}<br>- <b>九轉：</b>{td_str}｜量比 {vol_ratio}倍</div></div>
         <div class="pillar-card"><div class="pillar-title"><span>💰 3. 法人 & 資券</span><span class="{'tag-bull' if eval_res['inst_vol_ratio']>0 else 'tag-bear'}">佔量 {eval_res['inst_vol_ratio']:+.1f}%</span></div><div class="pillar-main">5日 {fmt_colored_num(p_chip[5]['tot'])}</div><div class="bar-bg"><div style="width:{c_pct}%; height:100%; background:{BULL_COLOR if c_pct>=60 else BEAR_COLOR};"></div></div><div class="pillar-sub">- <b>1日/3日：</b>{fmt_colored_num(p_chip[1]['tot'])}／{fmt_colored_num(p_chip[3]['tot'])}<br>- <b>5日資增減：</b>{fmt_colored_num(margin_info['periods'][5]['m_chg'])}</div></div>
         <div class="pillar-card"><div class="pillar-title"><span>🚀 4. 營收 / 位階</span><span class="tag-neutral">基本面</span></div><div class="pillar-main">{rev_main}</div><div class="bar-bg"><div style="width:{f_pct}%; height:100%; background:#3498DB;"></div></div><div class="pillar-sub">{rev_sub}<br>- <b>10/20日法人：</b>{fmt_colored_num(p_chip[10]['tot'])}／{fmt_colored_num(p_chip[20]['tot'])}</div></div></div>""", unsafe_allow_html=True)
@@ -506,7 +507,8 @@ elif cur_tab == 3:
         if taiex["ok"]:
             mkt_eval = de.evaluate_taiex_market_score(taiex, cfg, breadth_fg, taiex.get("macro"), BULL_COLOR, BEAR_COLOR, WARN_COLOR)
             macro, mkt_cdp = mkt_eval["macro"], de.calculate_cdp(taiex["high"], taiex["low"], taiex["close"])
-            st.markdown(f"<p style='font-size:{round(14*scale,1)}px; color:{TEXT_MUTED};'>📅 <b>交易日：{taiex['date']}</b> ｜ 加權指數：<b>{taiex['close']:,} 點</b>（<b>{taiex['chg']:+} 點</b>） ｜ 💵 台幣：<b>{macro['fx_rate']}</b> ｜ 🌎 費半：<b>{macro['sox_chg_1d_pct']:+.2f}%</b>（<b>r={macro['sox_corr_20d']}</b>）</p>", unsafe_allow_html=True)
+            prev_idx = taiex.get("prev_close", round(taiex["close"] - taiex["chg"], 1))
+            st.markdown(f"<p style='font-size:{round(14*scale,1)}px; color:{TEXT_MUTED};'>📅 <b>交易日：{taiex['date']}</b> ｜ 最新指數：<b>{taiex['close']:,} 點</b>（昨收 <b>{prev_idx:,} 點</b> ／ 今日 <b>{taiex['chg']:+} 點</b>） ｜ 20MA月線均價：<b>{taiex['ma20']:,} 點</b> ｜ 💵 台幣：<b>{macro['fx_rate']}</b> ｜ 🌎 費半：<b>{macro['sox_chg_1d_pct']:+.2f}%</b></p>", unsafe_allow_html=True)
             st.markdown(f"""<div class="score-banner"><div style="flex:1; min-width:240px;">
             <div style="font-size:{round(19*scale,1)}px; font-weight:bold; color:{mkt_eval['color']}; margin-bottom:8px;">{mkt_eval['light']}</div>
             <div style="font-size:{round(14.2*scale,1)}px; line-height:1.7; background:{SCORE_BOX_BG}; padding:10px 14px; border-radius:8px; border-left:4px solid {mkt_eval['color']};">{mkt_eval['summary_action_html']}</div></div>
@@ -547,7 +549,7 @@ def render_floating_ai_assistant(active_code, active_name, cfg_obj, quotes_df):
         if q_col1.button(f"📊 診斷 {active_code} {active_name}", use_container_width=True): quick_q = f"請幫我深度分析 {active_code} {active_name} 近期強弱原因、籌碼結構與明日當沖四價位策略"
         if q_col2.button("🛡️ 大盤匯率費半與總結", use_container_width=True): quick_q = "請告訴我今日大盤5維度評分、匯率費半連動與實戰操作總結論"
 
-        with st.container(height=310, border=True):
+        with st.container(height=360, border=True):
             for idx_m, msg in enumerate(st.session_state.ai_chat_history[-8:]):
                 with st.chat_message(msg["role"]):
                     st.markdown(str(msg["content"]).replace("`", "**"))
@@ -558,12 +560,11 @@ def render_floating_ai_assistant(active_code, active_name, cfg_obj, quotes_df):
                         if st.button(lbl, key=f"ai_jmp_{idx_m}_{btn_c}", use_container_width=True, type="primary" if not on_t1 else "secondary"):
                             jump_to_tab1_with_stock(btn_c, btn_n, btn_m); st.rerun(scope="app")
 
-        user_in = st.chat_input("問問題(如：為什麼00877這麼弱？怎麼看3167？)...")
+        user_in = st.chat_input("問問題(如：為什麼00877這麼弱？怎麼看00406A？)...")
         final_q = quick_q or user_in
         if final_q:
             st.session_state.ai_chat_history.append({"role": "user", "content": final_q})
 
-            # 【v12.5 精準意圖判斷】先找明確的 4~6 碼代號；若無代號且含大盤關鍵字，優先進入大盤診斷，絕不誤綁定 ETF！
             m_code = re.search(r"(?<![0-9A-Za-z])(00\d{2,4}[A-Za-z]?|\d{4})(?![0-9A-Za-z])", final_q.upper())
             is_market_query = (not m_code) and any(k in final_q for k in ["大盤", "加權", "台指", "止跌", "匯率", "費半"])
 
@@ -572,7 +573,8 @@ def render_floating_ai_assistant(active_code, active_name, cfg_obj, quotes_df):
                 if tx["ok"]:
                     m_ev = de.evaluate_taiex_market_score(tx, cfg_obj, bfg, tx.get("macro"), BULL_COLOR, BEAR_COLOR, WARN_COLOR)
                     mc, m_cdp = m_ev["macro"], de.calculate_cdp(tx["high"], tx["low"], tx["close"])
-                    reply_txt = f"🛡️ **【台股大盤 5 維度快篩（{tx['date']}｜總分 {m_ev['total']}/100）】**\n- **燈號**：**{m_ev['light']}**\n- **指數**：**{tx['close']:,} 點**（單日 **{tx['chg']:+}**）｜台幣 **{mc['fx_rate']}**｜費半 **{mc['sox_chg_1d_pct']:+.2f}%**\n- **明日四價位**：壓力 **NH {m_cdp['NH']:,} ／ AH {m_cdp['AH']:,}** ｜ 支撐 **NL {m_cdp['NL']:,} ／ AL {m_cdp['AL']:,}**\n\n{m_ev['summary_action']}"
+                    prev_idx = tx.get("prev_close", round(tx["close"] - tx["chg"], 1))
+                    reply_txt = f"🛡️ **【台股大盤 5 維度快篩（{tx['date']}｜總分 {m_ev['total']}/100）】**\n- **燈號**：**{m_ev['light']}**\n- **最新指數**：**{tx['close']:,} 點**（昨收 **{prev_idx:,} 點** ／ 今日 **{tx['chg']:+} 點** ／ 20MA月線均價 **{tx['ma20']:,} 點**）\n- **匯率與費半**：台幣 **{mc['fx_rate']}**｜費半 **{mc['sox_chg_1d_pct']:+.2f}%**\n- **明日四價位**：壓力 **NH {m_cdp['NH']:,} ／ AH {m_cdp['AH']:,}** ｜ 支撐 **NL {m_cdp['NL']:,} ／ AL {m_cdp['AL']:,}**\n\n{m_ev['summary_action']}"
                 else: reply_txt = "暫時無法取得大盤資料。"
                 st.session_state.ai_chat_history.append({"role": "assistant", "content": reply_txt})
             else:
@@ -605,16 +607,15 @@ def render_floating_ai_assistant(active_code, active_name, cfg_obj, quotes_df):
                     if api_k:
                         news_titles = "；".join([x["title"] for x in n_d]) if n_d else "近期無特定重大新聞"
                         sys_ctx = (
-                            f"你是專業台股實戰分析師AI助手。用戶提問：「{final_q}」（鎖定標的：【{target_c} {target_n}】）。\n"
-                            f"請根據以下真實數據直接回答用戶問題（分析走弱或走強原因、主力與散戶融資動向、明日觀察點）：\n"
-                            f"- 日期：{t_d['date']}，現價：{t_d['close']}元（單日 {t_d['chg_1d_pct']:+.2f}%，5日 {t_d['chg_5d_pct']:+.2f}%），5MA={t_d['ma5']}、20MA={t_d['ma20']}、20日扣抵={t_d['deduct']}\n"
-                            f"- 評分：{ev['total']}/100（單日Alpha {ev['alpha_1d']:+.2f}%，5日法人佔量 {ev['inst_vol_ratio']:+.1f}%），三大法人1日 {p_c[1]['tot']:+,}張、5日 {p_c[5]['tot']:+,}張；5日融資增減 {m_d['periods'][5]['m_chg']:+,}張\n"
-                            f"- 三週期：{mtf_r['title']}｜系統歸因：{smart_reasons_txt}｜近期新聞：{news_titles}\n"
-                            f"- 明日四價位：極端突破AH={cdp_v['AH']}、常態壓力NH={cdp_v['NH']}、常態支撐NL={cdp_v['NL']}、極端破底AL={cdp_v['AL']}（勿提CDP中軸）。\n"
-                            f"請用犀利白話直接給結論、原因剖析與四價位操作應對（嚴禁使用反引號 `，改用粗體 **）。"
+                            f"你是台股實戰分析師。用戶問：「{final_q}」（標的：【{target_c} {target_n}】）。\n"
+                            f"真實數據：日期{t_d['date']}，現價{t_d['close']}元（昨收{t_d.get('prev_close', t_d['close'])}元，單日{t_d['chg_1d_pct']:+.2f}%，5日{t_d['chg_5d_pct']:+.2f}%），5MA={t_d['ma5']}、20MA月線均價={t_d['ma20']}、20日扣抵={t_d['deduct']}。\n"
+                            f"評分：{ev['total']}/100（單日Alpha {ev['alpha_1d']:+.2f}%，5日法人佔量 {ev['inst_vol_ratio']:+.1f}%），法人1日{p_c[1]['tot']:+,}張、5日{p_c[5]['tot']:+,}張；5日融資增減{m_d['periods'][5]['m_chg']:+,}張。\n"
+                            f"三週期：{mtf_r['title']}｜歸因：{smart_reasons_txt}｜新聞：{news_titles}\n"
+                            f"明日四價位：極端突破AH={cdp_v['AH']}、常態壓力NH={cdp_v['NH']}、常態支撐NL={cdp_v['NL']}、極端破底AL={cdp_v['AL']}（禁提CDP中軸）。\n"
+                            f"【強制格式】：1.嚴禁講「各位投資朋友好、我是AI助手」等開場白廢話，第一句直接給結論；2.嚴禁使用 # 或 ## 大標題，請用 📌 **【重點結論】**、📉 **【核心原因剖析】**、📐 **【明日四價位操作策略】** 三段式條列完整回答，總字數控制在 350 字內，確保結尾完整不斷句！"
                         )
                         g_txt, g_err = de.call_gemini_generate_content(sys_ctx, api_k)
-                        if g_txt: reply_txt = f"✨ **【Gemini Flash 深度實戰分析：{target_c} {target_n}】**\n\n" + g_txt
+                        if g_txt: reply_txt = f"✨ **【Gemini Flash 實戰剖析：{target_c} {target_n}】**\n\n" + g_txt
 
                     if not reply_txt:
                         err_note = f"\n\n⚠️ *(Gemini API 呼叫未通過：{g_err})*" if (api_k and g_err) else ""
