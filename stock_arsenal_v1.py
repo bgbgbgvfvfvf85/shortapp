@@ -1,5 +1,5 @@
 # ==============================================================================
-# ⚠️ 【重要防呆提醒】本檔案是：stock_arsenal_v1.py (前端主畫面)
+# ⚠️ 【重要防呆提醒】本檔案是：stock_arsenal_v1.py (前端主畫面 v12.5)
 # 請確認 GitHub 網頁頂端的檔名是 stock_arsenal_v1.py 再貼上！切勿貼到 data_engine.py！
 # ==============================================================================
 import os, re, json, importlib
@@ -51,17 +51,26 @@ h1, h2, h3, h4, h5, h6, p, label, .stMarkdown, [data-testid="stCaptionContainer"
 .stButton > button {{ background-color: {CARD_BG} !important; color: {TEXT_MAIN} !important; border: 1px solid {CARD_BORDER} !important; font-weight: bold !important; white-space: normal !important; line-height: 1.35 !important; padding: 0.45rem 0.7rem !important; min-height: 2.45rem !important; }}
 .stButton > button:hover {{ border-color: #4A90E2 !important; color: #60A5FA !important; }}
 .stButton > button[kind="primary"] {{ background: linear-gradient(135deg, #1E3A8A 0%, #2563EB 100%) !important; color: #FFFFFF !important; border: 1.5px solid #60A5FA !important; }}
-div[data-testid="stPopover"] {{ position: fixed !important; bottom: 24px !important; right: 26px !important; z-index: 999999 !important; }}
-div[data-testid="stPopover"] > div > button, div[data-testid="stPopover"] > button {{ background: linear-gradient(135deg, #00D26A 0%, #009E4F 100%) !important; color: #000 !important; border-radius: 50px !important; padding: 11px 20px !important; font-size: 15.5px !important; font-weight: 800 !important; border: 2px solid #FFF !important; box-shadow: 0 6px 20px rgba(0,210,106,0.55) !important; white-space: nowrap !important; }}
-div[data-testid="stPopover"] > div > button *, div[data-testid="stPopover"] > button * {{ color: #000 !important; font-weight: 800 !important; }}
-div[data-baseweb="popover"] > div, div[data-testid="stPopoverBody"] {{ background-color: {CARD_BG} !important; color: {TEXT_MAIN} !important; border: 1.5px solid #4A90E2 !important; border-radius: 14px !important; }}
-div[data-testid="stPopoverBody"] * {{ color: {TEXT_MAIN} !important; }}
-div[data-testid="stPopoverBody"] .stButton > button {{ background-color: {BG_MAIN} !important; border: 1px solid #4A90E2 !important; border-radius: 8px !important; }}
-div[data-testid="stPopoverBody"] .stButton > button[kind="primary"] {{ background: linear-gradient(135deg, #1E3A8A 0%, #2563EB 100%) !important; color: #FFF !important; }}
-div[data-testid="stPopoverBody"] .stButton > button[kind="primary"] * {{ color: #FFF !important; }}
+div[data-testid="stPopover"] {{ position: fixed !important; bottom: 24px !important; right: 24px !important; left: auto !important; width: auto !important; max-width: 220px !important; z-index: 999999 !important; }}
+div[data-testid="stPopover"] > div, div[data-testid="stPopover"] > div > button, div[data-testid="stPopover"] > button {{ width: auto !important; background: linear-gradient(135deg, #00D26A 0%, #009E4F 100%) !important; color: #000000 !important; border-radius: 50px !important; padding: 10px 18px !important; font-size: 15px !important; font-weight: 800 !important; border: 2px solid #FFFFFF !important; box-shadow: 0 6px 20px rgba(0,210,106,0.55) !important; white-space: nowrap !important; }}
+div[data-testid="stPopover"] > div > button *, div[data-testid="stPopover"] > button * {{ color: #000000 !important; font-weight: 800 !important; }}
+div[data-baseweb="popover"] > div, div[data-testid="stPopoverBody"] {{ background-color: {CARD_BG} !important; color: {TEXT_MAIN} !important; border: 1.5px solid #4A90E2 !important; border-radius: 14px !important; max-width: 92vw !important; }}
+div[data-testid="stPopoverBody"] h1, div[data-testid="stPopoverBody"] h2, div[data-testid="stPopoverBody"] h3, div[data-testid="stPopoverBody"] h4, div[data-testid="stPopoverBody"] p, div[data-testid="stPopoverBody"] span, div[data-testid="stPopoverBody"] li, div[data-testid="stPopoverBody"] strong, div[data-testid="stPopoverBody"] b, div[data-testid="stPopoverBody"] div[data-testid="stCaptionContainer"] {{ color: {TEXT_MAIN} !important; }}
+div[data-testid="stPopoverBody"] .stButton > button {{ background-color: {BG_MAIN} !important; color: {TEXT_MAIN} !important; border: 1px solid #4A90E2 !important; border-radius: 8px !important; }}
+div[data-testid="stPopoverBody"] .stButton > button * {{ color: {TEXT_MAIN} !important; }}
+div[data-testid="stPopoverBody"] .stButton > button[kind="primary"] {{ background: linear-gradient(135deg, #1E3A8A 0%, #2563EB 100%) !important; color: #FFFFFF !important; border: 1.5px solid #60A5FA !important; }}
+div[data-testid="stPopoverBody"] .stButton > button[kind="primary"] * {{ color: #FFFFFF !important; }}
 div[data-testid="stPopoverBody"] [data-testid="stChatMessage"] {{ background-color: {CARD_BG_ALT} !important; border: 1px solid {CARD_BORDER} !important; border-radius: 8px !important; padding: 8px 10px !important; margin-bottom: 6px !important; }}
 div[data-testid="stPopoverBody"] [data-testid="stChatInput"] > div {{ background-color: {BG_MAIN} !important; border: 1px solid {CARD_BORDER} !important; }}
-@media (max-width: 768px) {{ .block-container {{ padding: 2.2rem 0.65rem 5.5rem 0.65rem !important; }} div[data-testid="stPopover"] {{ bottom: 68px !important; right: 12px !important; }} }}
+div[data-testid="stPopoverBody"] textarea {{ color: {TEXT_MAIN} !important; -webkit-text-fill-color: {TEXT_MAIN} !important; caret-color: {TEXT_MAIN} !important; }}
+@media (max-width: 768px) {{
+    .block-container {{ padding: 2.2rem 0.65rem 5.5rem 0.65rem !important; }}
+    div[data-testid="stPopover"] {{ bottom: 68px !important; right: 14px !important; left: auto !important; width: auto !important; max-width: 185px !important; }}
+    div[data-testid="stPopover"] > div > button, div[data-testid="stPopover"] > button {{ padding: 8px 14px !important; font-size: 13.5px !important; }}
+}}
+div[data-baseweb="tab-list"] {{ display: flex !important; flex-wrap: wrap !important; gap: 6px !important; }}
+button[data-baseweb="tab"] {{ white-space: nowrap !important; padding: 0 12px !important; }}
+button[data-baseweb="tab"] p {{ color: {TEXT_MAIN} !important; font-weight: bold !important; font-size: {round(14 * scale, 1)}px !important; white-space: nowrap !important; }}
 .app-main-title {{ font-size: {round(21.5 * scale, 1)}px; font-weight: 800; color: {TEXT_MAIN}; margin: 0; }}
 .score-banner {{ background: {BANNER_BG}; border-radius: 14px; padding: 16px 18px; margin-bottom: 14px; border: 1px solid #4A90E2; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; }}
 .pillar-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax({card_min_w}, 1fr)); gap: 12px; margin-bottom: 16px; }}
@@ -82,6 +91,15 @@ div[data-testid="stPopoverBody"] [data-testid="stChatInput"] > div {{ background
 components.html(f"""<script>
 (function() {{
     const parentDoc = window.parent.document;
+    function injectCSS(doc) {{
+        if (!doc || doc.getElementById('plotly-hover-offset-v91')) return;
+        const s = doc.createElement('style'); s.id = 'plotly-hover-offset-v91';
+        s.innerHTML = `g.hoverlayer g.hovertext > path, g.hoverlayer g.hovertext > rect, g.hoverlayer g.hovertext > text {{ transform: translate(68px, -10px) !important; }} g.hoverlayer g.hovertext {{ opacity: 0.92 !important; pointer-events: none !important; }}`;
+        doc.head.appendChild(s);
+    }}
+    injectCSS(parentDoc);
+    setInterval(() => {{ injectCSS(parentDoc); parentDoc.querySelectorAll('iframe').forEach(ifr => {{ try {{ if (ifr.contentDocument) injectCSS(ifr.contentDocument); }} catch (e) {{}} }}); }}, 800);
+
     const closeSeq = {int(st.session_state.get("close_popover_seq", 0))};
     if (closeSeq > 0 && window.parent._lastClosePopoverSeq !== closeSeq) {{
         window.parent._lastClosePopoverSeq = closeSeq;
@@ -126,8 +144,8 @@ def plot_universal_kline_chart(kline_records, scale_factor=1.05, show_bb=True, s
     for col, name, clr, w, dsh in [("MA5", "5MA", "#3498DB", 1.4, None), ("MA20", "20MA", "#F59E0B", 2.2, None), ("MA60", "60MA", "#9B59B6", 1.5, "dot")]:
         if col in df_k.columns: fig.add_trace(go.Scatter(x=df_k[x_col], y=df_k[col], mode="lines", name=name, line=dict(color=clr, width=w, dash=dsh), hovertemplate="%{y:,.2f}"), row=1, col=1)
     if show_bb and "BB_Upper" in df_k.columns:
-        fig.add_trace(go.Scatter(x=df_k[x_col], y=df_k["BB_Upper"], mode="lines", name="布林上軌", line=dict(color="rgba(52,152,219,0.65)", width=1.3, dash="dash")), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df_k[x_col], y=df_k["BB_Lower"], mode="lines", name="布林下軌", line=dict(color="rgba(46,204,113,0.75)", width=1.5, dash="dash"), fill="tonexty", fillcolor="rgba(52,152,219,0.05)"), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df_k[x_col], y=df_k["BB_Upper"], mode="lines", name="布林上軌", line=dict(color="rgba(52,152,219,0.65)", width=1.3, dash="dash"), hovertemplate="%{y:,.2f}"), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df_k[x_col], y=df_k["BB_Lower"], mode="lines", name="布林下軌", line=dict(color="rgba(46,204,113,0.75)", width=1.5, dash="dash"), fill="tonexty", fillcolor="rgba(52,152,219,0.05)", hovertemplate="%{y:,.2f}"), row=1, col=1)
     b_col, s_col = ("TD_Buy_Disp" if "TD_Buy_Disp" in df_k.columns else "TD_Buy"), ("TD_Sell_Disp" if "TD_Sell_Disp" in df_k.columns else "TD_Sell")
     if show_td and b_col in df_k.columns:
         for _, r in df_k.iterrows():
@@ -139,17 +157,33 @@ def plot_universal_kline_chart(kline_records, scale_factor=1.05, show_bb=True, s
     if len(df_k) >= 20:
         dr, sc = df_k.iloc[-20], ("#F1C40F" if is_dark else "#D97706")
         dp = round(float(dr["Close"]), 2)
-        fig.add_trace(go.Scatter(x=[dr[x_col]], y=[dp], mode="markers+text", name="20根扣抵", marker=dict(color=sc, size=13, symbol="star"), text=[f"⭐{dp}"], textposition="top center", textfont=dict(color=sc, size=int(10.5*scale_factor))), row=1, col=1)
+        fig.add_trace(go.Scatter(x=[dr[x_col]], y=[dp], mode="markers+text", name="20根扣抵", marker=dict(color=sc, size=13, symbol="star"), text=[f"⭐{dp}"], textposition="top center", textfont=dict(color=sc, size=int(10.5*scale_factor)), hoverinfo="skip"), row=1, col=1)
         fig.add_hline(y=dp, line_width=1.1, line_dash="dash", line_color=sc, annotation_text=f"扣抵 {dp}", annotation_position="bottom left", row=1, col=1)
     if show_cdp and cdp_vals:
         for k, lbl, clr, pos in [("AH", "AH極端突破", "#EF4444", "top left"), ("NH", "NH常態壓力", "#F97316", "top right"), ("NL", "NL常態支撐", "#38BDF8", "bottom right"), ("AL", "AL極端破底", "#10B981", "bottom left")]:
             fig.add_hline(y=cdp_vals[k], line_width=1.1, line_dash="dot", line_color=clr, annotation_text=f"{lbl} {cdp_vals[k]}", annotation_position=pos, annotation_font=dict(color=clr, size=int(9.5*scale_factor)), row=1, col=1)
     if show_volume and "Volume" in df_k.columns:
-        fig.add_trace(go.Bar(x=df_k[x_col], y=df_k["Volume"], name="量(張)", marker_color=["#FF4B4B" if c >= o else "#00D26A" for c, o in zip(df_k["Close"], df_k["Open"])]), row=2, col=1)
+        fig.add_trace(go.Bar(x=df_k[x_col], y=df_k["Volume"], name="量(張)", marker_color=["#FF4B4B" if c >= o else "#00D26A" for c, o in zip(df_k["Close"], df_k["Open"])], hovertemplate="%{y:,.0f} 張"), row=2, col=1)
     y_min, y_max = float(df_k["Low"].min()), float(df_k["High"].max())
     if show_cdp and cdp_vals: y_min, y_max = min(y_min, cdp_vals["NL"]), max(y_max, cdp_vals["NH"])
     pad = max(0.5, (y_max - y_min) * 0.08)
-    fig.update_layout(hovermode="x unified", yaxis=dict(range=[y_min - pad, y_max + pad], gridcolor=GRID_COLOR), xaxis=dict(type="category", rangeslider=dict(visible=False), tickangle=-35, nticks=10), legend=dict(orientation="h", y=1.02, x=0), height=int((440 if show_volume else 400)*max(1.0, scale_factor*0.92)), margin=dict(l=8, r=12, t=40, b=20), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor=PLOT_BG, font=dict(color=TEXT_MAIN))
+
+    layout_cfg = dict(
+        hovermode="x unified",
+        hoverlabel=dict(bgcolor=CARD_BG, font_size=int(11.5 * scale_factor), font_color=TEXT_MAIN, bordercolor="#4A90E2"),
+        spikedistance=-1,
+        yaxis=dict(range=[y_min - pad, y_max + pad], tickfont=dict(size=int(10.5 * scale_factor), color=TEXT_MAIN), gridcolor=GRID_COLOR, automargin=True),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=int(10 * scale_factor), color=TEXT_MAIN)),
+        height=int((450 if show_volume else 410) * max(1.0, scale_factor * 0.92)),
+        margin=dict(l=12, r=12, t=42, b=20), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor=PLOT_BG, font=dict(color=TEXT_MAIN)
+    )
+    if show_volume and "Volume" in df_k.columns:
+        layout_cfg["xaxis"] = dict(type="category", rangeslider=dict(visible=False), showticklabels=False)
+        layout_cfg["xaxis2"] = dict(type="category", tickangle=-35, nticks=10, tickfont=dict(size=int(10 * scale_factor), color=TEXT_MAIN), automargin=True)
+        layout_cfg["yaxis2"] = dict(tickfont=dict(size=int(10 * scale_factor), color=TEXT_MAIN), gridcolor=GRID_COLOR, automargin=True)
+    else:
+        layout_cfg["xaxis"] = dict(type="category", rangeslider=dict(visible=False), tickangle=-35, nticks=10, tickfont=dict(size=int(10 * scale_factor), color=TEXT_MAIN), automargin=True)
+    fig.update_layout(**layout_cfg)
     return fig
 
 def plot_20d_chip_bar_chart(daily_table, scale_factor=1.1):
@@ -157,19 +191,36 @@ def plot_20d_chip_bar_chart(daily_table, scale_factor=1.1):
     df_c["ShortDate"] = df_c["交易日期"].str.slice(5)
     fig = go.Figure()
     for col, name, clr in [("外資買賣超(張)", "外資", "#3498DB"), ("投信買賣超(張)", "投信", "#FF6B6B"), ("自營商買賣超(張)", "自營", "#F59E0B")]:
-        fig.add_trace(go.Bar(x=df_c["ShortDate"], y=df_c[col], name=name, marker_color=clr))
-    fig.add_trace(go.Scatter(x=df_c["ShortDate"], y=df_c["三大法人合計(張)"], mode="lines+markers", name="法人合計", line=dict(color=TEXT_MAIN, width=2, dash="dot")))
-    fig.update_layout(barmode="group", hovermode="x unified", xaxis=dict(type="category", tickangle=-35), yaxis=dict(gridcolor=GRID_COLOR), legend=dict(orientation="h", y=1.02), height=330, margin=dict(l=8, r=12, t=35, b=20), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor=PLOT_BG, font=dict(color=TEXT_MAIN))
+        fig.add_trace(go.Bar(x=df_c["ShortDate"], y=df_c[col], name=name, marker_color=clr, hovertemplate="%{y:+,} 張"))
+    fig.add_trace(go.Scatter(x=df_c["ShortDate"], y=df_c["三大法人合計(張)"], mode="lines+markers", name="法人合計", line=dict(color=TEXT_MAIN, width=2, dash="dot"), hovertemplate="%{y:+,} 張"))
+    fig.add_hline(y=0, line_width=1, line_color=TEXT_MUTED)
+    fig.update_layout(
+        barmode="group", hovermode="x unified",
+        hoverlabel=dict(bgcolor=CARD_BG, font_size=int(11.5 * scale_factor), font_color=TEXT_MAIN, bordercolor="#4A90E2"),
+        xaxis=dict(type="category", tickangle=-35, tickfont=dict(size=int(10 * scale_factor), color=TEXT_MAIN), automargin=True),
+        yaxis=dict(tickfont=dict(size=int(10.5 * scale_factor), color=TEXT_MAIN), gridcolor=GRID_COLOR, automargin=True),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=int(10.5 * scale_factor), color=TEXT_MAIN)),
+        height=340, margin=dict(l=12, r=12, t=38, b=20), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor=PLOT_BG, font=dict(color=TEXT_MAIN)
+    )
     return fig
 
 def plot_20d_margin_bar_chart(daily_table, scale_factor=1.1):
     df_m = pd.DataFrame(daily_table).sort_values("交易日期", ascending=True)
     df_m["ShortDate"] = df_m["交易日期"].str.slice(5)
     fig = go.Figure()
-    fig.add_trace(go.Bar(x=df_m["ShortDate"], y=df_m["融資增減(張)"], name="融資增減", marker_color="#FF6B6B"))
-    fig.add_trace(go.Bar(x=df_m["ShortDate"], y=df_m["融券增減(張)"], name="融券增減", marker_color="#2ECC71"))
-    fig.add_trace(go.Scatter(x=df_m["ShortDate"], y=df_m["券資比(%)"], mode="lines+markers", name="券資比(%)", yaxis="y2", line=dict(color="#F59E0B", width=2, dash="dot")))
-    fig.update_layout(barmode="group", hovermode="x unified", xaxis=dict(type="category", tickangle=-35), yaxis=dict(gridcolor=GRID_COLOR), yaxis2=dict(overlaying="y", side="right", showgrid=False), legend=dict(orientation="h", y=1.02), height=330, margin=dict(l=8, r=12, t=35, b=20), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor=PLOT_BG, font=dict(color=TEXT_MAIN))
+    fig.add_trace(go.Bar(x=df_m["ShortDate"], y=df_m["融資增減(張)"], name="融資增減", marker_color="#FF6B6B", hovertemplate="%{y:+,} 張"))
+    fig.add_trace(go.Bar(x=df_m["ShortDate"], y=df_m["融券增減(張)"], name="融券增減", marker_color="#2ECC71", hovertemplate="%{y:+,} 張"))
+    fig.add_trace(go.Scatter(x=df_m["ShortDate"], y=df_m["券資比(%)"], mode="lines+markers", name="券資比(%)", yaxis="y2", line=dict(color="#F59E0B", width=2, dash="dot"), hovertemplate="%{y:.2f}%"))
+    fig.add_hline(y=0, line_width=1, line_color=TEXT_MUTED)
+    fig.update_layout(
+        barmode="group", hovermode="x unified",
+        hoverlabel=dict(bgcolor=CARD_BG, font_size=int(11.5 * scale_factor), font_color=TEXT_MAIN, bordercolor="#4A90E2"),
+        xaxis=dict(type="category", tickangle=-35, tickfont=dict(size=int(10 * scale_factor), color=TEXT_MAIN), automargin=True),
+        yaxis=dict(tickfont=dict(size=int(10.5 * scale_factor), color=TEXT_MAIN), gridcolor=GRID_COLOR, automargin=True),
+        yaxis2=dict(tickfont=dict(size=int(10 * scale_factor), color="#F59E0B"), overlaying="y", side="right", showgrid=False, automargin=True),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=int(10.5 * scale_factor), color=TEXT_MAIN)),
+        height=340, margin=dict(l=12, r=12, t=38, b=20), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor=PLOT_BG, font=dict(color=TEXT_MAIN)
+    )
     return fig
 
 def check_tab_password_gate(tab_num, tab_key, is_locked, correct_pwd, gate_title, gate_desc, line_url):
@@ -272,7 +323,7 @@ with st.sidebar:
         if c_a2.button("登出", use_container_width=True): st.session_state.admin_unlocked = False; st.rerun()
         new_line = st.text_input("💬 LINE 連結：", value=cfg["broker_line_url"]).strip()
         new_promo = st.checkbox("🌐 對外開發公版模式", value=bool(cfg.get("public_promo_mode", False)))
-        new_g_key = st.text_input("🤖 Gemini API Key (標準為 AIzaSy 開頭)：", type="password", value=str(cfg.get("gemini_api_key", ""))).strip()
+        new_g_key = st.text_input("🤖 Gemini API Key：", type="password", value=str(cfg.get("gemini_api_key", ""))).strip()
         new_fm = st.text_input("🔑 FinMind Token：", type="password", value=str(cfg.get("finmind_token", ""))).strip()
         l_t1, p_t1 = st.checkbox("鎖定分頁 1", value=bool(cfg.get("lock_tab1", False))), st.text_input("分頁 1 密碼：", value=str(cfg.get("pwd_tab1", "VIP888"))).strip()
         l_t2, p_t2 = st.checkbox("鎖定分頁 2", value=bool(cfg.get("lock_tab2", False))), st.text_input("分頁 2 密碼：", value=str(cfg.get("pwd_tab2", "TICK888"))).strip()
@@ -511,16 +562,12 @@ def render_floating_ai_assistant(active_code, active_name, cfg_obj, quotes_df):
         final_q = quick_q or user_in
         if final_q:
             st.session_state.ai_chat_history.append({"role": "user", "content": final_q})
-            target_c, target_n = active_code, active_name
-            m_code = re.search(r"(?<![0-9A-Za-z])(00\d{2,4}[A-Za-z]?|\d{4})(?![0-9A-Za-z])", final_q.upper())
-            if m_code:
-                target_c = m_code.group(1).upper()
-                target_n = code_to_name_map.get(target_c, master_stock_dict.get(target_c, {}).get("名稱", target_c))
-            else:
-                for s_name in sorted(name_to_code_map.keys(), key=len, reverse=True):
-                    if len(s_name) >= 2 and s_name in final_q: target_c, target_n = name_to_code_map[s_name], s_name; break
 
-            if not m_code and any(k in final_q for k in ["大盤", "加權", "台指", "止跌", "匯率", "費半"]):
+            # 【v12.5 精準意圖判斷】先找明確的 4~6 碼代號；若無代號且含大盤關鍵字，優先進入大盤診斷，絕不誤綁定 ETF！
+            m_code = re.search(r"(?<![0-9A-Za-z])(00\d{2,4}[A-Za-z]?|\d{4})(?![0-9A-Za-z])", final_q.upper())
+            is_market_query = (not m_code) and any(k in final_q for k in ["大盤", "加權", "台指", "止跌", "匯率", "費半"])
+
+            if is_market_query:
                 tx, bfg = de.fetch_taiex_market_data(), de.fetch_full_market_snapshot_and_breadth(cfg_obj.get("cnn_fear_greed", 34))
                 if tx["ok"]:
                     m_ev = de.evaluate_taiex_market_score(tx, cfg_obj, bfg, tx.get("macro"), BULL_COLOR, BEAR_COLOR, WARN_COLOR)
@@ -529,6 +576,14 @@ def render_floating_ai_assistant(active_code, active_name, cfg_obj, quotes_df):
                 else: reply_txt = "暫時無法取得大盤資料。"
                 st.session_state.ai_chat_history.append({"role": "assistant", "content": reply_txt})
             else:
+                target_c, target_n = active_code, active_name
+                if m_code:
+                    target_c = m_code.group(1).upper()
+                    target_n = code_to_name_map.get(target_c, master_stock_dict.get(target_c, {}).get("名稱", target_c))
+                else:
+                    for s_name in sorted(name_to_code_map.keys(), key=len, reverse=True):
+                        if len(s_name) >= 2 and s_name in final_q: target_c, target_n = name_to_code_map[s_name], s_name; break
+
                 t_mkt = code_to_mkt_map.get(target_c, master_stock_dict.get(target_c, {}).get("市場", "TPEX" if target_c.endswith("B") else "TWSE"))
                 t_d = de.fetch_technical_indicators(target_c, t_mkt)
                 t_60, t_5 = de.fetch_intraday_kline_full(target_c, t_mkt, "60m"), de.fetch_intraday_kline_full(target_c, t_mkt, "5m")
@@ -559,10 +614,10 @@ def render_floating_ai_assistant(active_code, active_name, cfg_obj, quotes_df):
                             f"請用犀利白話直接給結論、原因剖析與四價位操作應對（嚴禁使用反引號 `，改用粗體 **）。"
                         )
                         g_txt, g_err = de.call_gemini_generate_content(sys_ctx, api_k)
-                        if g_txt: reply_txt = f"✨ **【Gemini 2.5 Flash 深度實戰分析：{target_c} {target_n}】**\n\n" + g_txt
+                        if g_txt: reply_txt = f"✨ **【Gemini Flash 深度實戰分析：{target_c} {target_n}】**\n\n" + g_txt
 
                     if not reply_txt:
-                        err_note = f"\n\n⚠️ *(Gemini API 呼叫未通過：{g_err}；標準 Gemini 金鑰應為 AIzaSy 開頭，目前已自動由內建智慧歸因引擎為您解答)*" if (api_k and g_err) else ""
+                        err_note = f"\n\n⚠️ *(Gemini API 呼叫未通過：{g_err})*" if (api_k and g_err) else ""
                         reply_txt = (
                             f"🔍 **【{target_c} {target_n} 機構四維度快篩（{t_d['date']} 現價 {t_d['close']} 元｜單日 {t_d['chg_1d_pct']:+.2f}% ／ 5日 {t_d['chg_5d_pct']:+.2f}%）】**\n"
                             f"- **機構總分**：**{ev['total']} / 100 分**｜**三週期**：**{mtf_r['title']}**\n\n"
