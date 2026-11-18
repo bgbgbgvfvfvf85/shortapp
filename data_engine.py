@@ -1,5 +1,5 @@
 # ==============================================================================
-# ⚠️ 【重要防呆提醒】本檔案是：data_engine.py (後端資料引擎)
+# ⚠️ 【重要防呆提醒】本檔案是：data_engine.py (後端資料引擎 v12.5)
 # 請確認 GitHub 網頁頂端的檔名是 data_engine.py 再貼上！切勿貼到 stock_arsenal_v1.py！
 # ==============================================================================
 import os, re, io, csv, json, math, time, base64, urllib.parse, urllib3, requests
@@ -133,12 +133,45 @@ def load_config():
     except Exception: pass
     return cfg
 
+@st.cache_data(ttl=3600)
+def _discover_available_flash_models(clean_k):
+    """
+    【v12.5 自動偵測最新 Flash 模型】向 Google 伺服器查詢該金鑰可用之所有 Flash 模型（嚴格排除高耗能的 Pro 模型）
+    """
+    found = []
+    try:
+        r = GLOBAL_HTTP_SESSION.get(f"https://generativelanguage.googleapis.com/v1beta/models?key={urllib.parse.quote(clean_k)}", timeout=5, verify=False)
+        if r.status_code == 200 and r.json().get("models"):
+            for m in r.json()["models"]:
+                m_name = str(m.get("name", "")).replace("models/", "")
+                methods = m.get("supportedGenerationMethods", [])
+                if "generateContent" in methods and "flash" in m_name.lower() and "pro" not in m_name.lower():
+                    found.append(m_name)
+    except Exception:
+        pass
+    # 依版本號由新到舊排序 (例如 gemini-3.5-flash / gemini-3.0-flash 排最前面)
+    found.sort(reverse=True)
+    return found
+
 def call_gemini_generate_content(prompt_text, api_key, timeout_sec=15):
+    """
+    【v12.5 終極 Flash 呼叫器】
+    優先使用 Google 官方最新指定的 gemini-3.0-flash / gemini-3.5-flash-lite 與自動偵測到的最新 Flash 模型！
+    """
     clean_k = str(api_key).strip()
     if not clean_k: return "", "未填寫 Gemini API Key"
     payload = {"contents": [{"parts": [{"text": prompt_text}]}]}
+
+    # 結合預設最新 Flash 清單與動態查詢到的可用 Flash 清單
+    default_candidates = ["gemini-3.0-flash", "gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-2.5-flash"]
+    dynamic_flash = _discover_available_flash_models(clean_k)
+    candidate_models = []
+    for m in (default_candidates + dynamic_flash):
+        if m not in candidate_models:
+            candidate_models.append(m)
+
     err_detail = ""
-    for model_name in ["gemini-2.5-flash", "gemini-2.0-flash"]:
+    for model_name in candidate_models[:5]:
         try:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={urllib.parse.quote(clean_k)}"
             r = GLOBAL_HTTP_SESSION.post(url, json=payload, timeout=timeout_sec, verify=False)
@@ -146,14 +179,19 @@ def call_gemini_generate_content(prompt_text, api_key, timeout_sec=15):
                 cands = r.json().get("candidates", [])
                 if cands and cands[0].get("content", {}).get("parts"):
                     return cands[0]["content"]["parts"][0]["text"].replace("`", "**"), ""
-            elif clean_k.startswith("AQ.") or clean_k.startswith("ya29."):
-                url_b = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
-                r_b = GLOBAL_HTTP_SESSION.post(url_b, headers={"Authorization": f"Bearer {clean_k}"}, json=payload, timeout=timeout_sec, verify=False)
-                if r_b.status_code == 200:
-                    cands = r_b.json().get("candidates", [])
-                    if cands and cands[0].get("content", {}).get("parts"):
-                        return cands[0]["content"]["parts"][0]["text"].replace("`", "**"), ""
-            err_detail = r.json().get("error", {}).get("message", f"HTTP {r.status_code}") if r.text else f"HTTP {r.status_code}"
+            err_msg = r.json().get("error", {}).get("message", f"HTTP {r.status_code}") if r.text else f"HTTP {r.status_code}"
+            err_detail = err_msg
+            # 若報錯訊息中有 Google 建議的新模型名稱 (如 models/gemini-X.X-flash)，立即自動提取並呼叫！
+            m_suggest = re.search(r"models/(gemini-[a-zA-Z0-9\.\-]+)", err_msg)
+            if m_suggest:
+                sug_model = m_suggest.group(1)
+                if sug_model not in candidate_models and "pro" not in sug_model.lower():
+                    url_s = f"https://generativelanguage.googleapis.com/v1beta/models/{sug_model}:generateContent?key={urllib.parse.quote(clean_k)}"
+                    r_s = GLOBAL_HTTP_SESSION.post(url_s, json=payload, timeout=timeout_sec, verify=False)
+                    if r_s.status_code == 200:
+                        cands = r_s.json().get("candidates", [])
+                        if cands and cands[0].get("content", {}).get("parts"):
+                            return cands[0]["content"]["parts"][0]["text"].replace("`", "**"), ""
         except Exception as e:
             err_detail = str(e)
     return "", err_detail
@@ -1146,7 +1184,7 @@ def fetch_stock_news(code, name):
     return {"news": final_n}
 
 def extract_stocks_from_image_via_gemini(image_bytes, mime_type, api_key):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.0-flash:generateContent?key={api_key}"
     payload = {"contents": [{"parts": [{"text": "請從截圖辨識所有台股代號或股票名稱，用逗號分隔回傳"}, {"inline_data": {"mime_type": mime_type, "data": base64.b64encode(image_bytes).decode("utf-8")}}]}]}
     resp = GLOBAL_HTTP_SESSION.post(url, json=payload, timeout=15, verify=False)
     return resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip() if resp.status_code == 200 else ""
