@@ -1,5 +1,5 @@
 # ==============================================================================
-# ⚠️ 【重要防呆提醒】本檔案是：data_engine.py (後端資料引擎 v12.5)
+# ⚠️ 【重要防呆提醒】本檔案是：data_engine.py (後端資料引擎 v12.6)
 # 請確認 GitHub 網頁頂端的檔名是 data_engine.py 再貼上！切勿貼到 stock_arsenal_v1.py！
 # ==============================================================================
 import os, re, io, csv, json, math, time, base64, urllib.parse, urllib3, requests
@@ -40,7 +40,7 @@ DEFAULT_SECTOR_STOCKS_MAP = {
     "10. ASIC矽智財與IC設計": [["3661", "世芯-KY", "TWSE"], ["3443", "創意", "TWSE"], ["2454", "聯發科", "TWSE"], ["3529", "力旺", "TPEX"], ["6643", "M31", "TPEX"], ["5274", "信驊", "TPEX"], ["3035", "智原", "TWSE"]],
     "11. 800VDC電源與BBU備援電池": [["2308", "台達電", "TWSE"], ["2301", "光寶科", "TWSE"], ["6781", "AES-KY", "TWSE"], ["3211", "順達", "TPEX"], ["4931", "新盛力", "TPEX"], ["6558", "興能高", "TWSE"]],
     "12. TLVR電感與被動元件": [["2327", "國巨", "TWSE"], ["2492", "華新科", "TWSE"], ["3357", "臺慶科", "TPEX"], ["2375", "凱美", "TWSE"], ["3026", "禾伸堂", "TWSE"]],
-    "13. 記憶體與控制IC": [["2408", "南亞科", "TWSE"], ["2344", "華邦電", "TWSE"], ["8299", "群聯", "TPEX"], ["3260", "威剛", "TPEX"], ["4967", "十銓", "TWSE"], ["3006", "晶豪科", "TWSE"]],
+    "13.記憶體與控制IC": [["2408", "南亞科", "TWSE"], ["2344", "華邦電", "TWSE"], ["8299", "群聯", "TPEX"], ["3260", "威剛", "TPEX"], ["4967", "十銓", "TWSE"], ["3006", "晶豪科", "TWSE"]],
     "14. 石英元件與高速傳輸": [["3042", "晶技", "TWSE"], ["2484", "希華", "TWSE"], ["3221", "台嘉碩", "TPEX"], ["4966", "譜瑞-KY", "TPEX"], ["5269", "祥碩", "TWSE"]],
     "15. 重電電網與綠能儲能": [["1519", "華城", "TWSE"], ["1513", "中興電", "TWSE"], ["1503", "士電", "TWSE"], ["1514", "亞力", "TWSE"], ["1504", "東元", "TWSE"], ["2371", "大同", "TWSE"]],
     "16. 貨櫃航運與塑化原物料": [["2603", "長榮", "TWSE"], ["2609", "陽明", "TWSE"], ["2615", "萬海", "TWSE"], ["1303", "南亞", "TWSE"], ["1101", "台泥", "TWSE"], ["2002", "中鋼", "TWSE"]]
@@ -78,6 +78,13 @@ INDUSTRY_TO_SECTOR_BRIDGE = {
 
 def md_bold_to_html(txt):
     return re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", str(txt)).replace("\n", "<br>")
+
+def clean_ai_markdown_text(raw_txt):
+    """將 Gemini 輸出的超大 # 標題轉為乾淨粗體，並清除斷尾殘留的孤立 ** 符號"""
+    txt = str(raw_txt).replace("`", "**")
+    txt = re.sub(r"(?m)^#{1,4}\s*(.+)$", r"📌 **\1**", txt)
+    txt = re.sub(r"\*\*\s*$", "", txt.strip())
+    return txt
 
 def parse_roc_date_str(roc_str):
     m = re.search(r"(\d{2,3})[/年\-\.](\d{1,2})[/月\-\.](\d{1,2})", str(roc_str).strip())
@@ -135,9 +142,6 @@ def load_config():
 
 @st.cache_data(ttl=3600)
 def _discover_available_flash_models(clean_k):
-    """
-    【v12.5 自動偵測最新 Flash 模型】向 Google 伺服器查詢該金鑰可用之所有 Flash 模型（嚴格排除高耗能的 Pro 模型）
-    """
     found = []
     try:
         r = GLOBAL_HTTP_SESSION.get(f"https://generativelanguage.googleapis.com/v1beta/models?key={urllib.parse.quote(clean_k)}", timeout=5, verify=False)
@@ -149,20 +153,20 @@ def _discover_available_flash_models(clean_k):
                     found.append(m_name)
     except Exception:
         pass
-    # 依版本號由新到舊排序 (例如 gemini-3.5-flash / gemini-3.0-flash 排最前面)
     found.sort(reverse=True)
     return found
 
-def call_gemini_generate_content(prompt_text, api_key, timeout_sec=15):
+def call_gemini_generate_content(prompt_text, api_key, timeout_sec=18):
     """
-    【v12.5 終極 Flash 呼叫器】
-    優先使用 Google 官方最新指定的 gemini-3.0-flash / gemini-3.5-flash-lite 與自動偵測到的最新 Flash 模型！
+    【v12.6 防斷尾升級】強制設定 maxOutputTokens=2500，確保即使模型啟動內部思考 (Thinking)，也有充足配額完整輸出全文！
     """
     clean_k = str(api_key).strip()
     if not clean_k: return "", "未填寫 Gemini API Key"
-    payload = {"contents": [{"parts": [{"text": prompt_text}]}]}
+    payload = {
+        "contents": [{"parts": [{"text": prompt_text}]}],
+        "generationConfig": {"maxOutputTokens": 2500, "temperature": 0.3}
+    }
 
-    # 結合預設最新 Flash 清單與動態查詢到的可用 Flash 清單
     default_candidates = ["gemini-3.0-flash", "gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-2.5-flash"]
     dynamic_flash = _discover_available_flash_models(clean_k)
     candidate_models = []
@@ -178,10 +182,11 @@ def call_gemini_generate_content(prompt_text, api_key, timeout_sec=15):
             if r.status_code == 200:
                 cands = r.json().get("candidates", [])
                 if cands and cands[0].get("content", {}).get("parts"):
-                    return cands[0]["content"]["parts"][0]["text"].replace("`", "**"), ""
+                    full_txt = "".join(p.get("text", "") for p in cands[0]["content"]["parts"] if "text" in p)
+                    if full_txt.strip():
+                        return clean_ai_markdown_text(full_txt), ""
             err_msg = r.json().get("error", {}).get("message", f"HTTP {r.status_code}") if r.text else f"HTTP {r.status_code}"
             err_detail = err_msg
-            # 若報錯訊息中有 Google 建議的新模型名稱 (如 models/gemini-X.X-flash)，立即自動提取並呼叫！
             m_suggest = re.search(r"models/(gemini-[a-zA-Z0-9\.\-]+)", err_msg)
             if m_suggest:
                 sug_model = m_suggest.group(1)
@@ -191,7 +196,9 @@ def call_gemini_generate_content(prompt_text, api_key, timeout_sec=15):
                     if r_s.status_code == 200:
                         cands = r_s.json().get("candidates", [])
                         if cands and cands[0].get("content", {}).get("parts"):
-                            return cands[0]["content"]["parts"][0]["text"].replace("`", "**"), ""
+                            full_txt = "".join(p.get("text", "") for p in cands[0]["content"]["parts"] if "text" in p)
+                            if full_txt.strip():
+                                return clean_ai_markdown_text(full_txt), ""
         except Exception as e:
             err_detail = str(e)
     return "", err_detail
@@ -213,7 +220,7 @@ def get_master_stock_dictionary():
         ("0056", "元大高股息", "TWSE"), ("00878", "國泰永續高股息", "TWSE"), ("00919", "群益台灣精選高息", "TWSE"),
         ("00929", "復華台灣科技優息", "TWSE"), ("00940", "元大台灣價值高息", "TWSE"), ("00877", "復華中國5G", "TPEX"),
         ("00631L", "元大台灣50正2", "TWSE"), ("00632R", "元大台灣50反1", "TWSE"), ("00937B", "群益ESG投等債20+", "TPEX"),
-        ("00679B", "元大美債20年", "TPEX"), ("00687B", "國泰20年美債", "TPEX"), ("6214", "精誠", "TWSE")
+        ("00679B", "元大美債20年", "TPEX"), ("00687B", "國泰20年美債", "TPEX"), ("6214", "精誠", "TWSE"), ("00406A", "主動中信台灣收益", "TWSE")
     ]
     for c, n, m in preset_list: stock_dict[c] = {"代號": c, "名稱": n, "市場": m, "投本比": 0.0, "外本比": 0.0}
     for s_list in DEFAULT_SECTOR_STOCKS_MAP.values():
@@ -569,7 +576,7 @@ def fetch_technical_indicators(code, market_hint="TWSE"):
         pv = hist.iloc[-2]
         hr = max(0.5, round((float(pv["High"]) - float(pv["Low"])) * 0.5, 2))
         hp, lp = round(cp + hr, 2), round(max(0.01, cp - hr), 2)
-    prev_1d = float(hist["Close"].iloc[-2]) if len(hist) >= 2 else cp
+    prev_1d = round(float(hist["Close"].iloc[-2]), 2) if len(hist) >= 2 else cp
     prev_5d = float(hist["Close"].iloc[-6]) if len(hist) >= 6 else prev_1d
     chg_1d_pct = round(((cp - prev_1d) / prev_1d) * 100.0, 2) if prev_1d > 0 else 0.0
     chg_5d_pct = round(((cp - prev_5d) / prev_5d) * 100.0, 2) if prev_5d > 0 else 0.0
@@ -579,7 +586,7 @@ def fetch_technical_indicators(code, market_hint="TWSE"):
     hist_60 = hist.tail(60).copy()
     hist_60["DateStr"], hist_60["ShortDate"] = hist_60.index.strftime("%Y-%m-%d"), hist_60.index.strftime("%m-%d")
     return {
-        "ok": True, "date": hist.index[-1].strftime("%Y-%m-%d"), "high": hp, "low": lp, "close": cp,
+        "ok": True, "date": hist.index[-1].strftime("%Y-%m-%d"), "high": hp, "low": lp, "close": cp, "prev_close": prev_1d,
         "chg_1d_pct": chg_1d_pct, "chg_5d_pct": chg_5d_pct, "vol_5d_lots": max(1.0, vol_5d_lots),
         "ma5": round(float(lt["MA5"]), 2) if pd.notna(lt["MA5"]) else cp,
         "ma20": round(float(lt["MA20"]), 2) if pd.notna(lt["MA20"]) else cp,
@@ -692,11 +699,11 @@ def build_smart_diagnostic_reasons(code, name, tech, chip, margin_info, fund_inf
     reasons = []
 
     if c < ma20 and c < ma5:
-        reasons.append(f"**① 均線反壓與扣抵蓋頭**：現價（**{c}元**）同時跌破五日線（**{ma5}元**）與月線（**{ma20}元**，乖離率 **{bias20:+.2f}%**），且 20 日扣抵值在 **{ded}元** 形成上檔壓力，短中期技術面處於空方排列。")
+        reasons.append(f"**① 均線反壓與扣抵蓋頭**：現價（**{c}元**）同時跌破五日線（**{ma5}元**）與 20MA 月線均價（**{ma20}元**，月線乖離率 **{bias20:+.2f}%**），且 20 日扣抵值在 **{ded}元** 形成上檔壓力，短中期技術面處於空方排列。")
     elif c >= ma20 and c < ma5:
-        reasons.append(f"**① 短線漲多拉回修正**：雖守在月線（**{ma20}元**）之上，但短線跌破五日線（**{ma5}元**），屬於波段偏多下的短線獲利了結洗盤。")
+        reasons.append(f"**① 短線漲多拉回修正**：現價（**{c}元**）雖守在 20MA 月線均價（**{ma20}元**）之上，但短線跌破五日線（**{ma5}元**），屬於波段偏多下的短線獲利了結洗盤。")
     else:
-        reasons.append(f"**① 均線多頭助漲**：現價（**{c}元**）站穩五日線（**{ma5}元**）與月線（**{ma20}元**）之上，技術面具備支撐。")
+        reasons.append(f"**① 均線多頭助漲**：現價（**{c}元**）站穩五日線（**{ma5}元**）與 20MA 月線均價（**{ma20}元**）之上，技術面具備支撐。")
 
     if is_etf and any(w in name for w in ["中國", "陸", "滬", "深", "恒生", "港", "美債", "日", "越"]):
         reasons.append(f"**② 海外標的指數與匯率連動（關鍵主因）**：**{code} {name}** 屬於追蹤海外資產之 ETF（近1日 **{chg_1d:+.2f}%** ／ 近5日 **{chg_5d:+.2f}%**），走勢直接受其追蹤之海外成分股指數（如陸港股 5G/通信板塊或海外債市）回檔拖累，與台股加權指數脫鉤（5日對抗台股 Alpha 為 **{alpha_5d:+.2f}%**）。")
@@ -825,25 +832,25 @@ def evaluate_three_pillars(tech, chip, bull_c="#FF6B6B", bear_c="#2ECC71", warn_
     if total >= 70:
         verdict, v_color = "🔥 機構級多方強勢共振（跑贏大盤 Alpha ＋ 均線助漲 ＋ 籌碼優勢）", bull_c
         v_desc = (
-            f"📌 **【看懂指標意義】**：目前價格站上月線（{ma20}元）且強於大盤（單日Alpha {alpha_1d:+.2f}%），{chip_dir}{mg_dir}。{rev_warn_str}\n"
+            f"📌 **【看懂指標意義】**：目前現價（{c}元）站上 20MA 月線均價（{ma20}元）且強於大盤（單日Alpha {alpha_1d:+.2f}%），{chip_dir}{mg_dir}。{rev_warn_str}\n"
             f"🎯 **【後續動作與關鍵價位】**：大方向屬多頭順風，切忌在急拉衝高至 **NH常態壓力（{cdp_v['NH']}元）～ AH極端突破（{cdp_v['AH']}元）** 時追高；實戰上宜等待盤中 5分K 拉回測試 **NL常態支撐（{cdp_v['NL']}元）** 或 5分K 20MA 不破時順勢切入。"
         )
     elif total >= 50:
         verdict, v_color = "📈 偏多震盪輪動（波段結構偏多，短線留意分K支撐與籌碼續航）", bull_c
         v_desc = (
-            f"📌 **【看懂指標意義】**：目前中長線結構仍維持偏多（月線 {ma20}元、單日Alpha {alpha_1d:+.2f}%），{chip_dir}{mg_dir}。{rev_warn_str}\n"
+            f"📌 **【看懂指標意義】**：目前現價（{c}元）中長線結構維持偏多（20MA 月線均價 {ma20}元、單日Alpha {alpha_1d:+.2f}%），{chip_dir}{mg_dir}。{rev_warn_str}\n"
             f"🎯 **【後續動作與關鍵價位】**：屬偏多但短線有震盪洗盤需求，建議盯緊 60分K 與 5分K 是否同步守穩均線。下檔防守點看 **NL常態支撐（{cdp_v['NL']}元）** 與 **AL極端破底（{cdp_v['AL']}元）**，上檔過 **NH壓力（{cdp_v['NH']}元）** 需有量能配合。"
         )
     elif total >= 35:
         verdict, v_color = "⚖️ 多空交戰拉鋸（技術與籌碼訊號分歧，宜區間靈活應對）", warn_c
         v_desc = (
-            f"📌 **【看懂指標意義】**：目前技術面與籌碼出現分歧（月線 {ma20}元、{chip_dir}），缺乏一致性的單邊動能。{rev_warn_str}\n"
+            f"📌 **【看懂指標意義】**：目前現價（{c}元）與籌碼出現分歧（20MA 月線均價 {ma20}元、{chip_dir}），缺乏一致性的單邊動能。{rev_warn_str}\n"
             f"🎯 **【後續動作與關鍵價位】**：不宜盲目追漲殺跌，建議採箱型區間操作——回測下方 **NL常態支撐（{cdp_v['NL']}元）～ AL（{cdp_v['AL']}元）** 且 5分K 出低九轉折時找短多機會；反彈靠近 **NH常態壓力（{cdp_v['NH']}元）～ AH（{cdp_v['AH']}元）** 見高九受阻則先行調節。"
         )
     else:
         verdict, v_color = "❄️ 空方壓制修正警戒（均線反壓 ＋ 籌碼調節，留意超跌低九轉折）", bear_c
         v_desc = (
-            f"📌 **【看懂指標意義】**：目前價格受制於月線（{ma20}元）反壓（月線乖離 {bias20:+.2f}%、單日Alpha {alpha_1d:+.2f}%），{chip_dir}{mg_dir}，短線賣壓沉重。{rev_warn_str}\n"
+            f"📌 **【看懂指標意義】**：目前現價（{c}元）受制於 20MA 月線均價（{ma20}元）反壓（月線負乖離 {bias20:+.2f}%、單日Alpha {alpha_1d:+.2f}%），{chip_dir}{mg_dir}，短線賣壓沉重。{rev_warn_str}\n"
             f"🎯 **【後續動作與關鍵價位】**：{'若為主題/存股型 ETF，可觀察追蹤標的止穩且日K/60分K出現『▲低9』觸及布林下軌時再分批布局；' if is_etf else '在尚未帶量站回 60分K 20MA 與日K五日線前，切勿盲目摸底接刀！'}盤中反彈壓力看 **NH（{cdp_v['NH']}元）～ AH（{cdp_v['AH']}元）**；下檔支撐觀察 **NL（{cdp_v['NL']}元）** 與 **AL（{cdp_v['AL']}元）**。"
         )
 
@@ -877,7 +884,8 @@ def fetch_macro_fx_and_sox(taiex_hist_df=None):
 def evaluate_taiex_market_score(taiex, cfg, breadth_fg, macro_info=None, bull_c="#FF6B6B", bear_c="#2ECC71", warn_c="#F1C40F"):
     c, ma5, ma20, ma60, ded = taiex["close"], taiex["ma5"], taiex["ma20"], taiex["ma60"], taiex["deduct"]
     chg, bias20, kv, dv = taiex["chg"], taiex["bias20"], taiex["K"], taiex["D"]
-    chg_pct = round((chg / max(1.0, c - chg)) * 100.0, 2)
+    prev_c = round(c - chg, 1)
+    chg_pct = round((chg / max(1.0, prev_c)) * 100.0, 2)
     sp_f, sp_t, sp_d = float(cfg.get("mkt_spot_foreign", 0.0)), float(cfg.get("mkt_spot_trust", 0.0)), float(cfg.get("mkt_spot_dealer", 0.0))
     sp_tot = round(sp_f + sp_t + sp_d, 2)
     foi, foi_chg, m_chg, m_chg3 = int(cfg.get("mkt_foreign_oi", -30000)), int(cfg.get("mkt_foreign_oi_chg", 0)), float(cfg.get("mkt_margin_chg", 0.0)), float(cfg.get("mkt_margin_chg_3d", 0.0))
@@ -931,19 +939,19 @@ def evaluate_taiex_market_score(taiex, cfg, breadth_fg, macro_info=None, bull_c=
     chip_meaning = f"三大法人現貨合計 {sp_tot:+.1f} 億（外資期貨未平倉 {foi:,} 口，單日 {foi_chg:+,} 口），上市櫃上漲家數佔比 {up_ratio}%"
     if total >= 70:
         light, clr = "🟢 綠燈｜多頭強勢順風（匯率熱錢流入＋均線助漲＋法人推升）", bull_c
-        summary_action = f"📌 **【大盤總結論與實戰意義】**：目前指數站穩月線（{ma20:,}點）且 {fx_meaning}，{chip_meaning}，市場賺錢效應極佳！\n🎯 **【後續動作提醒】**：順風盤可積極從下方主流族群挑選跑贏大盤（正Alpha）的領頭羊操作；明日大盤支撐看 **NL（{mkt_cdp['NL']:,}點）**，壓力看 **NH（{mkt_cdp['NH']:,}點）** 與 **AH（{mkt_cdp['AH']:,}點）**。"
+        summary_action = f"📌 **【大盤總結論與實戰意義】**：最新指數 **{c:,} 點**（昨日收盤 {prev_c:,} 點，今日 {chg:+} 點），穩健站上 **20MA 月線均價（{ma20:,}點）** 且 {fx_meaning}，{chip_meaning}，市場賺錢效應極佳！\n🎯 **【後續動作提醒】**：順風盤可積極從下方主流族群挑選跑贏大盤（正Alpha）的領頭羊操作；明日大盤支撐看 **NL（{mkt_cdp['NL']:,}點）**，壓力看 **NH（{mkt_cdp['NH']:,}點）** 與 **AH（{mkt_cdp['AH']:,}點）**。"
         ct, cb = "🔥 大盤處於多方強勢順風區！想掌握今日領漲主流股的切入位階嗎？", "💬 點此私訊您的專屬營業員：索取【今日主流強勢股深度籌碼清單】"
     elif total >= 50:
         light, clr = "🟢 偏多綠黃燈｜多方控盤輪動（守穩支撐，主流族群輪動表現）", bull_c
-        summary_action = f"📌 **【大盤總結論與實戰意義】**：目前大盤結構維持偏多（月線 {ma20:,}點，乖離 {bias20:+.2f}%），{fx_meaning}，{chip_meaning}。代表指數空間雖溫和，但內資與個股輪動非常活絡！\n🎯 **【後續動作提醒】**：採取「重個股、輕指數」策略，鎖定下方帶有 🔥 標記的動態入榜強勢股，趁盤中回測支撐布局；大盤下檔防守看 **NL（{mkt_cdp['NL']:,}點）**，上檔觀察 **NH（{mkt_cdp['NH']:,}點）**。"
+        summary_action = f"📌 **【大盤總結論與實戰意義】**：最新指數 **{c:,} 點**（昨日收盤 {prev_c:,} 點，今日 {chg:+} 點），結構維持偏多（**20MA 月線均價 {ma20:,}點**，乖離 {bias20:+.2f}%），{fx_meaning}，{chip_meaning}。代表指數空間雖溫和，但內資與個股輪動非常活絡！\n🎯 **【後續動作提醒】**：採取「重個股、輕指數」策略，鎖定下方帶有 🔥 標記的動態入榜強勢股，趁盤中回測支撐布局；大盤下檔防守看 **NL（{mkt_cdp['NL']:,}點）**，上檔觀察 **NH（{mkt_cdp['NH']:,}點）**。"
         ct, cb = "📈 大盤維持偏多輪動格局！想檢視手中持股是否在主流資金軌道上嗎？", "💬 點此私訊您的專屬營業員：預約【持股強弱診斷與主流換股討論】"
     elif total >= 35:
         light, clr = "🟡 黃燈｜多空交戰拉鋸（均線與籌碼分歧，宜選股不選市）", warn_c
-        summary_action = f"📌 **【大盤總結論與實戰意義】**：目前指數與籌碼訊號分歧（月線 {ma20:,}點，{fx_meaning}，{chip_meaning}），多空在關鍵均線附近激烈交戰，追高容易被洗！\n🎯 **【後續動作提醒】**：資金控管宜維持 5 成以下，淘汰破線弱勢股，僅針對有法人買超且守穩月線的抗跌股做短線區間應對；大盤區間重點盯緊下檔 **NL（{mkt_cdp['NL']:,}點）～ AL（{mkt_cdp['AL']:,}點）** 與上檔 **NH（{mkt_cdp['NH']:,}點）**。"
+        summary_action = f"📌 **【大盤總結論與實戰意義】**：最新指數 **{c:,} 點**（昨日收盤 {prev_c:,} 點，今日 {chg:+} 點），與籌碼訊號分歧（**20MA 月線均價 {ma20:,}點**，{fx_meaning}，{chip_meaning}），多空在關鍵均線附近激烈交戰，追高容易被洗！\n🎯 **【後續動作提醒】**：資金控管宜維持 5 成以下，淘汰破線弱勢股，僅針對有法人買超且守穩月線的抗跌股做短線區間應對；大盤區間重點盯緊下檔 **NL（{mkt_cdp['NL']:,}點）～ AL（{mkt_cdp['AL']:,}點）** 與上檔 **NH（{mkt_cdp['NH']:,}點）**。"
         ct, cb = "🛡️ 大盤處於多空交戰拉鋸區！想了解如何利用短線當沖或期貨避險靈活應對嗎？", "💬 點此私訊您的專屬營業員：預約【1對1 持股健檢 & 短線操作策略討論】"
     else:
         light, clr = "🚨 紅燈｜空方修正／超跌警戒（破線提款＋融資清洗，緊盯止跌訊號）", bear_c
-        summary_action = f"📌 **【大盤總結論與實戰意義】**：目前大盤跌破月線（{ma20:,}點，負乖離 {bias20:+.2f}%），{fx_meaning}，{chip_meaning}，融資近3日累計 {m_chg3:+.1f} 億，盤勢處於空方宣洩與浮額清洗階段！\n🎯 **【後續動作提醒】**：在尚未同時出現「①重新站回5MA（{ma5:,}點）或布林下軌、②外資期貨空單回補、③融資大幅減肥」三大止跌訊號前，多看少做或利用個股期避險；明日下檔支撐觀察 **NL（{mkt_cdp['NL']:,}點）** 與 **AL（{mkt_cdp['AL']:,}點）**，反彈壓力看 **NH（{mkt_cdp['NH']:,}點）**。"
+        summary_action = f"📌 **【大盤總結論與實戰意義】**：最新指數 **{c:,} 點**（昨日收盤 {prev_c:,} 點，今日 {chg:+} 點），目前位於 **20MA 月線均價（{ma20:,}點）** 之下（月線負乖離 {bias20:+.2f}%），{fx_meaning}，{chip_meaning}，融資近3日累計 {m_chg3:+.1f} 億，盤勢處於空方宣洩與浮額清洗階段！\n🎯 **【後續動作提醒】**：在尚未同時出現「①重新站回5MA（{ma5:,}點）或布林下軌、②外資期貨空單回補、③融資大幅減肥」三大止跌訊號前，多看少做或利用個股期避險；明日下檔支撐觀察 **NL（{mkt_cdp['NL']:,}點）** 與 **AL（{mkt_cdp['AL']:,}點）**，反彈壓力看 **NH（{mkt_cdp['NH']:,}點）**。"
         ct, cb = "🚨 盤勢進入急跌宣洩與融資清洗階段！想掌握大盤何時出現破底翻止跌訊號嗎？", "💬 點此私訊您的專屬營業員：預約【持股壓力測試 & 超跌反彈布局討論】"
 
     return {"total": total, "light": light, "color": clr, "summary_action": summary_action, "summary_action_html": md_bold_to_html(summary_action), "cta_title": ct, "cta_btn": cb, "breakdown": breakdown, "macro": macro}
@@ -1053,7 +1061,7 @@ def fetch_taiex_market_data():
     hist_60["DateStr"], hist_60["ShortDate"] = hist_60.index.strftime("%Y-%m-%d"), hist_60.index.strftime("%m-%d")
     macro_info = fetch_macro_fx_and_sox(hist)
     return {
-        "ok": True, "date": hist.index[-1].strftime("%Y-%m-%d"), "close": cp, "open": op, "chg": round(cp - pc, 1),
+        "ok": True, "date": hist.index[-1].strftime("%Y-%m-%d"), "close": cp, "prev_close": pc, "open": op, "chg": round(cp - pc, 1),
         "chg_5d_pct": round(((cp - p5) / p5) * 100.0, 2) if p5 > 0 else 0.0,
         "high": hp, "low": lp, "ma5": ma5, "ma20": ma20, "ma60": ma60, "bias20": round(((cp - ma20) / ma20) * 100.0, 2) if ma20 > 0 else 0.0,
         "bb_upper": bbu, "bb_lower": bbd, "bb_status": bb_st, "reclaimed_bb_low": rec_bb,
